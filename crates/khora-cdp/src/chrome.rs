@@ -105,11 +105,12 @@ mod tests {
 
     #[test]
     fn test_find_chrome_respects_env_var() {
-        // Test with a path that exists
-        std::env::set_var("CHROME_PATH", "/bin/sh");
+        // Test with a path that exists on all platforms
+        let test_path = std::env::current_exe().unwrap();
+        std::env::set_var("CHROME_PATH", &test_path);
         let result = find_chrome();
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), PathBuf::from("/bin/sh"));
+        assert_eq!(result.unwrap(), test_path);
         std::env::remove_var("CHROME_PATH");
     }
 
