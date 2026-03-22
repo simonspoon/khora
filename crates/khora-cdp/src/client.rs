@@ -105,14 +105,40 @@ impl CdpClient {
         })
     }
 
-    /// Navigate to a URL by creating a new page/tab.
-    /// Uses new_page(url) which handles navigation + load in one step,
-    /// avoiding timeout issues with goto() on reconnected sessions.
+    /// Navigate to a URL in the current page.
+    /// Uses JS-based navigation + readyState polling instead of CDP Page.navigate,
+    /// because chromiumoxide's goto() waits for lifecycle events that may not fire
+    /// on reconnected sessions.
     pub async fn navigate(&self, url: &str) -> KhoraResult<()> {
-        self.browser
-            .new_page(url)
+        let page = self.get_or_create_page().await?;
+        let js = format!(
+            "window.location.href = {}",
+            serde_json::to_string(url).unwrap_or_default()
+        );
+        page.evaluate(js)
             .await
             .map_err(|e| KhoraError::NavigationFailed(e.to_string()))?;
+
+        // Poll for document ready state
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(10);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let ready = page
+                .evaluate("document.readyState")
+                .await
+                .ok()
+                .and_then(|r| r.into_value::<String>().ok())
+                .unwrap_or_default();
+            if ready == "complete" || ready == "interactive" {
+                break;
+            }
+            if start.elapsed() >= timeout {
+                return Err(KhoraError::NavigationFailed(
+                    "timed out waiting for page load".to_string(),
+                ));
+            }
+        }
         Ok(())
     }
 
