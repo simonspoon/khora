@@ -1,0 +1,15 @@
+[package]
+name = "khora-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core types, config, and error handling for Khora web automation"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
