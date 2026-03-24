@@ -52,7 +52,8 @@ SESSION1=$(khora --format json launch | jq -r .id)
 SESSION2=$(khora --format json launch | jq -r .id)
 khora navigate "$SESSION1" "https://app1.com"
 khora navigate "$SESSION2" "https://app2.com"
-khora status  # lists all sessions
+khora status        # lists all sessions
+khora kill --all    # kill every active session at once
 ```
 
 ## Common patterns

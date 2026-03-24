@@ -149,8 +149,12 @@ enum Command {
 
     /// Close browser and clean up session
     Kill {
-        /// Session ID
-        session: String,
+        /// Session ID (omit with --all to kill every session)
+        #[arg(required_unless_present = "all", conflicts_with = "all")]
+        session: Option<String>,
+        /// Kill all active sessions
+        #[arg(long)]
+        all: bool,
     },
 
     /// Check if a session is still alive
@@ -372,16 +376,43 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             }
         }
 
-        Command::Kill { session } => {
-            let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
-            client.close().await?;
-            SessionInfo::remove(&session_info.id)?;
+        Command::Kill { session, all } => {
+            let sessions_to_kill: Vec<_> = if *all {
+                SessionInfo::list_all()?
+            } else {
+                let id = session.as_deref().unwrap();
+                vec![khora_cdp::load_and_verify(id)?]
+            };
+
+            let mut killed = Vec::new();
+            for info in &sessions_to_kill {
+                match CdpClient::connect(info).await {
+                    Ok(client) => {
+                        let _ = client.close().await;
+                    }
+                    Err(_) => {
+                        // Chrome already dead — clean up lock manually
+                        khora_cdp::cleanup_singleton_lock();
+                    }
+                }
+                let _ = SessionInfo::remove(&info.id);
+                killed.push(info.id.clone());
+            }
 
             match cli.format {
-                OutputFormat::Text => Ok(format!("Killed session: {}", session_info.id)),
+                OutputFormat::Text => {
+                    if killed.len() == 1 {
+                        Ok(format!("Killed session: {}", killed[0]))
+                    } else {
+                        Ok(format!(
+                            "Killed {} sessions: {}",
+                            killed.len(),
+                            killed.join(", ")
+                        ))
+                    }
+                }
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(
-                    &serde_json::json!({ "killed": session_info.id }),
+                    &serde_json::json!({ "killed": killed }),
                 )
                 .unwrap()),
             }

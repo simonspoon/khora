@@ -139,6 +139,8 @@ impl CdpClient {
                 ));
             }
         }
+        // Reinstall console hook — navigation replaces the page context, wiping window.__khora_console
+        let _ = self.install_console_hook().await;
         Ok(())
     }
 
@@ -475,11 +477,12 @@ impl CdpClient {
         !self._handler_handle.is_finished()
     }
 
-    /// Close the browser.
+    /// Close the browser and clean up the Chrome user data dir lock.
     pub async fn close(self) -> KhoraResult<()> {
         drop(self.browser);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         self._handler_handle.abort();
+        cleanup_singleton_lock();
         Ok(())
     }
 
@@ -524,4 +527,13 @@ fn get_browser_pid(_ws_url: &str) -> u32 {
     // The PID isn't directly in the WS URL. We'll use 0 to indicate unknown.
     // The session file will still track the session for reconnection purposes.
     0
+}
+
+/// Remove the SingletonLock left by Chrome in chromiumoxide's fixed user data dir.
+/// Called after close() or when Chrome is already dead, to prevent stale locks.
+pub fn cleanup_singleton_lock() {
+    let lock = std::env::temp_dir()
+        .join("chromiumoxide-runner")
+        .join("SingletonLock");
+    let _ = std::fs::remove_file(&lock);
 }
