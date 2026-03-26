@@ -67,8 +67,9 @@ khora launch --visible
 | `wait-gone <session> <selector>` | Wait for element to disappear |
 | `console <session>` | Read console messages |
 | `eval <session> <js>` | Execute JavaScript, return result |
-| `kill <session>` | Close browser and clean up |
+| `kill <session>` | Close browser and clean up (`--all` to kill every session) |
 | `status [session]` | Check session status (or list all) |
+| `network <session>` | List network requests *(not yet implemented)* |
 
 ## Output
 
