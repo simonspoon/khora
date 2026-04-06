@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.png" width="128" height="128" alt="khora">
+</p>
+
 # khora
 
 Web app QA automation for agents. Navigate pages, find elements, click buttons, type text, take screenshots — all from the command line via Chrome DevTools Protocol.
