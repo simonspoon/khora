@@ -230,34 +230,71 @@ impl CdpClient {
     }
 
     /// Click an element matching a CSS selector.
+    /// Uses JS-based click to avoid chromiumoxide element methods hanging
+    /// on reconnected sessions.
     pub async fn click(&self, selector: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        let element = page
-            .find_element(selector)
+        let js = format!(
+            r#"
+            (() => {{
+                const el = document.querySelector({selector});
+                if (!el) return {{ found: false }};
+                el.click();
+                return {{ found: true }};
+            }})()
+            "#,
+            selector = serde_json::to_string(selector).unwrap_or_default()
+        );
+
+        let result = page
+            .evaluate(js)
             .await
-            .map_err(|e| KhoraError::ElementNotFound(format!("{selector}: {e}")))?;
-        element
-            .click()
-            .await
-            .map_err(|e| KhoraError::Cdp(format!("click failed: {e}")))?;
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let value = result
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            return Err(KhoraError::ElementNotFound(selector.to_string()));
+        }
         Ok(())
     }
 
     /// Type text into an element matching a CSS selector.
+    /// Uses JS-based focus + value assignment to avoid chromiumoxide element
+    /// methods hanging on reconnected sessions. Also dispatches input/change
+    /// events so frameworks (React, Vue, etc.) pick up the value.
     pub async fn type_text(&self, selector: &str, text: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        let element = page
-            .find_element(selector)
+        let js = format!(
+            r#"
+            (() => {{
+                const el = document.querySelector({selector});
+                if (!el) return {{ found: false }};
+                el.focus();
+                el.value = {text};
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return {{ found: true }};
+            }})()
+            "#,
+            selector = serde_json::to_string(selector).unwrap_or_default(),
+            text = serde_json::to_string(text).unwrap_or_default()
+        );
+
+        let result = page
+            .evaluate(js)
             .await
-            .map_err(|e| KhoraError::ElementNotFound(format!("{selector}: {e}")))?;
-        element
-            .click()
-            .await
-            .map_err(|e| KhoraError::Cdp(format!("focus failed: {e}")))?;
-        element
-            .type_str(text)
-            .await
-            .map_err(|e| KhoraError::Cdp(format!("type failed: {e}")))?;
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let value = result
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            return Err(KhoraError::ElementNotFound(selector.to_string()));
+        }
         Ok(())
     }
 
