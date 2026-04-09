@@ -228,6 +228,19 @@ OUTPUT=$("$KHORA" wait-gone "$SESSION" "#ephemeral" --timeout 5000 2>&1)
 EC=$?
 assert_exit "wait-gone #ephemeral" "$EC" 0
 
+# ── network ──────────────────────────────────────────────
+
+printf "\n${BOLD}▸ network${NC}\n"
+# Trigger fetch + XHR via eval (click can hang on some elements)
+"$KHORA" eval "$SESSION" "var b=URL.createObjectURL(new Blob(['ok'])); fetch(b); var x=new XMLHttpRequest(); x.open('POST',b); x.send('hi'); 'ok'" >/dev/null 2>&1
+sleep 0.5  # let fetch + XHR complete
+OUTPUT=$("$KHORA" network "$SESSION" 2>&1)
+EC=$?
+assert_exit "network exits 0" "$EC" 0
+assert_contains "network captured fetch" "$OUTPUT" "fetch"
+assert_contains "network captured xhr" "$OUTPUT" "xhr"
+assert_contains "network has POST method" "$OUTPUT" "POST"
+
 # ── JSON output format ──────────────────────────────────
 
 printf "\n${BOLD}▸ JSON format${NC}\n"

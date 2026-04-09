@@ -108,6 +108,26 @@ khora attribute "$S" "img.logo" "src"
 khora attribute "$S" "a.nav-link" "href"
 ```
 
+### Network request tracking
+
+```bash
+# After navigating and interacting, check what requests were made
+khora network "$S"
+# METHOD STATUS TYPE         URL
+# GET    200    fetch        https://api.example.com/users
+# POST   201    xhr          https://api.example.com/submit
+```
+
+Captures `fetch()` and `XMLHttpRequest` calls made by page JavaScript. Useful for verifying that API calls happened and returned expected status codes.
+
+**What it captures:** programmatic requests (`fetch`, `XMLHttpRequest`) with method, status code, and URL.
+
+**What it doesn't capture:** browser-initiated resource loads (images, stylesheets, scripts, fonts). For those, use `eval` with the Performance API:
+
+```bash
+khora eval "$S" "JSON.stringify(performance.getEntriesByType('resource').map(e => ({url: e.name, type: e.initiatorType})))"
+```
+
 ### Wait patterns
 
 ```bash

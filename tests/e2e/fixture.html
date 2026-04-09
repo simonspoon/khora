@@ -24,6 +24,9 @@
   <button id="hide-btn">Hide Delayed</button>
   <div id="vanish-target"><span id="ephemeral">I will vanish</span></div>
 
+  <!-- network test: triggers a fetch and XHR -->
+  <button id="network-btn">Fire Requests</button>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -56,6 +59,18 @@
         var el = document.getElementById('ephemeral');
         if (el) el.parentNode.removeChild(el);
       }, 500);
+    });
+
+    // Network test: fetch + XHR using blob URLs (works on file://)
+    document.getElementById('network-btn').addEventListener('click', function() {
+      var blob = new Blob(['ok'], {type: 'text/plain'});
+      var url = URL.createObjectURL(blob);
+      fetch(url).then(function() { console.log('fetch-done'); });
+
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', url);
+      xhr.addEventListener('load', function() { console.log('xhr-done'); });
+      xhr.send('test');
     });
 
     // Eval test value

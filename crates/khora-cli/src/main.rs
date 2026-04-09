@@ -133,7 +133,7 @@ enum Command {
         session: String,
     },
 
-    /// List network requests (not yet implemented)
+    /// List captured network requests (fetch and XHR)
     Network {
         /// Session ID
         session: String,
@@ -192,9 +192,12 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             let (client, session) = CdpClient::launch(!visible).await?;
             session.save()?;
 
-            // Install console hook for this session
+            // Install console and network hooks for this session
             if let Err(e) = client.install_console_hook().await {
                 tracing::warn!("failed to install console hook: {e}");
+            }
+            if let Err(e) = client.install_network_hook().await {
+                tracing::warn!("failed to install network hook: {e}");
             }
 
             // Keep the browser alive by leaking the client
@@ -354,13 +357,12 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             Ok(khora_core::output::format_console(&messages, cli.format))
         }
 
-        Command::Network { session: _ } => match cli.format {
-            OutputFormat::Text => Ok("Network request tracking not yet implemented.".to_string()),
-            OutputFormat::Json => Ok(serde_json::to_string_pretty(
-                &serde_json::json!({ "error": "not implemented" }),
-            )
-            .unwrap()),
-        },
+        Command::Network { session } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            let requests = client.network_requests().await?;
+            Ok(khora_core::output::format_network(&requests, cli.format))
+        }
 
         Command::Eval { session, js } => {
             let session_info = khora_cdp::load_and_verify(session)?;

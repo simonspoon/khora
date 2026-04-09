@@ -3,7 +3,7 @@ use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
-use khora_core::element::{BoundingBox, ConsoleMessage, ElementInfo};
+use khora_core::element::{BoundingBox, ConsoleMessage, ElementInfo, NetworkRequest};
 use khora_core::error::{KhoraError, KhoraResult};
 use khora_core::session::SessionInfo;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -148,8 +148,9 @@ impl CdpClient {
                 }
             }
         }
-        // Reinstall console hook — navigation replaces the page context, wiping window.__khora_console
+        // Reinstall hooks — navigation replaces the page context
         let _ = self.install_console_hook().await;
+        let _ = self.install_network_hook().await;
         Ok(())
     }
 
@@ -438,6 +439,86 @@ impl CdpClient {
             }
             _ => Ok(Vec::new()),
         }
+    }
+
+    /// Read captured network requests from the page.
+    pub async fn network_requests(&self) -> KhoraResult<Vec<NetworkRequest>> {
+        let page = self.get_or_create_page().await?;
+        let js = r#"
+            (() => {
+                if (!window.__khora_network) return [];
+                return window.__khora_network;
+            })()
+        "#;
+
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let value = result
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        match value {
+            serde_json::Value::Array(arr) => {
+                let requests: Vec<NetworkRequest> = arr
+                    .into_iter()
+                    .filter_map(|v| serde_json::from_value(v).ok())
+                    .collect();
+                Ok(requests)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Install network request capture hook (monkey-patches fetch and XMLHttpRequest).
+    pub async fn install_network_hook(&self) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let js = r#"
+            (() => {
+                if (window.__khora_network) return;
+                window.__khora_network = [];
+
+                // Patch fetch
+                const origFetch = window.fetch;
+                window.fetch = function(input, init) {
+                    const url = (typeof input === 'string') ? input : (input.url || String(input));
+                    const method = (init && init.method) ? init.method.toUpperCase() : 'GET';
+                    const entry = { url, method, status: null, resource_type: 'fetch' };
+                    window.__khora_network.push(entry);
+                    return origFetch.apply(this, arguments).then(resp => {
+                        entry.status = resp.status;
+                        return resp;
+                    }).catch(err => {
+                        entry.status = 0;
+                        throw err;
+                    });
+                };
+
+                // Patch XMLHttpRequest
+                const origOpen = XMLHttpRequest.prototype.open;
+                const origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    this.__khora = { url: String(url), method: method.toUpperCase(), resource_type: 'xhr' };
+                    return origOpen.apply(this, arguments);
+                };
+                XMLHttpRequest.prototype.send = function() {
+                    if (this.__khora) {
+                        const entry = { ...this.__khora, status: null };
+                        window.__khora_network.push(entry);
+                        this.addEventListener('loadend', () => {
+                            entry.status = this.status || 0;
+                        });
+                    }
+                    return origSend.apply(this, arguments);
+                };
+            })()
+        "#;
+        page.evaluate(js)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
     }
 
     /// Install console message capture hook.
