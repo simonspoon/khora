@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Khora QA Fixture</title>
+</head>
+<body>
+  <h1 id="heading">Khora Test Page</h1>
+
+  <!-- text + attribute tests -->
+  <p id="greeting" data-testid="hello" data-role="primary">Hello, Khora!</p>
+
+  <!-- type test -->
+  <input id="name-input" type="text" placeholder="Enter name" />
+
+  <!-- click + console test -->
+  <button id="counter-btn">Clicked 0</button>
+
+  <!-- wait-for: appends element to DOM after delay -->
+  <button id="show-btn">Show Delayed</button>
+  <div id="appear-target"></div>
+
+  <!-- wait-gone: removes element from DOM after delay -->
+  <button id="hide-btn">Hide Delayed</button>
+  <div id="vanish-target"><span id="ephemeral">I will vanish</span></div>
+
+  <!-- find multiple elements -->
+  <ul id="items">
+    <li class="item">Alpha</li>
+    <li class="item">Beta</li>
+    <li class="item">Gamma</li>
+  </ul>
+
+  <script>
+    // Counter: click increments text and logs to console
+    var counter = 0;
+    document.getElementById('counter-btn').addEventListener('click', function() {
+      counter++;
+      document.getElementById('counter-btn').textContent = 'Clicked ' + counter;
+      console.log('counter:' + counter);
+    });
+
+    // Append a new element after 500ms (for wait-for)
+    document.getElementById('show-btn').addEventListener('click', function() {
+      setTimeout(function() {
+        var el = document.createElement('div');
+        el.id = 'appeared';
+        el.textContent = 'I appeared!';
+        document.getElementById('appear-target').appendChild(el);
+      }, 500);
+    });
+
+    // Remove element from DOM after 500ms (for wait-gone)
+    document.getElementById('hide-btn').addEventListener('click', function() {
+      setTimeout(function() {
+        var el = document.getElementById('ephemeral');
+        if (el) el.parentNode.removeChild(el);
+      }, 500);
+    });
+
+    // Eval test value
+    window.khoraTestValue = 42;
+  </script>
+</body>
+</html>

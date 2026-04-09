@@ -106,37 +106,46 @@ impl CdpClient {
     }
 
     /// Navigate to a URL in the current page.
-    /// Uses JS-based navigation + readyState polling instead of CDP Page.navigate,
-    /// because chromiumoxide's goto() waits for lifecycle events that may not fire
-    /// on reconnected sessions.
+    /// Uses page.goto() which sends CDP Page.navigate, updating the target URL
+    /// so subsequent connections can find the page. Falls back to JS-based
+    /// navigation if goto() hangs (lifecycle events may not fire on reconnected
+    /// sessions).
     pub async fn navigate(&self, url: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        let js = format!(
-            "window.location.href = {}",
-            serde_json::to_string(url).unwrap_or_default()
-        );
-        page.evaluate(js)
-            .await
-            .map_err(|e| KhoraError::NavigationFailed(e.to_string()))?;
 
-        // Poll for document ready state
-        let start = std::time::Instant::now();
-        let timeout = std::time::Duration::from_secs(10);
-        loop {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            let ready = page
-                .evaluate("document.readyState")
-                .await
-                .ok()
-                .and_then(|r| r.into_value::<String>().ok())
-                .unwrap_or_default();
-            if ready == "complete" || ready == "interactive" {
-                break;
+        // Try CDP Page.navigate via goto() with a timeout
+        let goto_result =
+            tokio::time::timeout(std::time::Duration::from_secs(10), page.goto(url)).await;
+
+        match goto_result {
+            Ok(Ok(_)) => {} // CDP navigation succeeded
+            Ok(Err(e)) => {
+                return Err(KhoraError::NavigationFailed(e.to_string()));
             }
-            if start.elapsed() >= timeout {
-                return Err(KhoraError::NavigationFailed(
-                    "timed out waiting for page load".to_string(),
-                ));
+            Err(_) => {
+                // goto() timed out (lifecycle events didn't fire).
+                // The page already navigated via CDP, but chromiumoxide is stuck
+                // waiting for load events. Poll readyState ourselves.
+                tracing::debug!("goto() timed out, polling readyState");
+                let start = std::time::Instant::now();
+                let timeout = std::time::Duration::from_secs(10);
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    let ready = page
+                        .evaluate("document.readyState")
+                        .await
+                        .ok()
+                        .and_then(|r| r.into_value::<String>().ok())
+                        .unwrap_or_default();
+                    if ready == "complete" || ready == "interactive" {
+                        break;
+                    }
+                    if start.elapsed() >= timeout {
+                        return Err(KhoraError::NavigationFailed(
+                            "timed out waiting for page load".to_string(),
+                        ));
+                    }
+                }
             }
         }
         // Reinstall console hook — navigation replaces the page context, wiping window.__khora_console
@@ -504,7 +513,7 @@ impl CdpClient {
                 .map_err(|e| KhoraError::Cdp(e.to_string()));
         }
 
-        // Try to find a non-blank page first
+        // Try to find a non-blank page by CDP target URL first
         for page in &pages {
             if let Ok(Some(ref u)) = page.url().await {
                 let url_str = u.as_str();
@@ -517,6 +526,17 @@ impl CdpClient {
             }
         }
 
+        // Fallback: check each page's actual location via JS, in case the
+        // target URL is stale (can happen after JS-based navigation).
+        for page in &pages {
+            if let Ok(result) = page.evaluate("location.href").await {
+                if let Ok(url) = result.into_value::<String>() {
+                    if url != "about:blank" && !url.is_empty() && !url.starts_with("chrome://") {
+                        return Ok(page.clone());
+                    }
+                }
+            }
+        }
         // Fall back to the first page
         Ok(pages.into_iter().next().unwrap())
     }

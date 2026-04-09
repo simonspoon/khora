@@ -50,9 +50,9 @@ Uses [chromiumoxide](https://crates.io/crates/chromiumoxide) (v0.9) for Chrome D
 
 - **Launch**: `Browser::launch()` with platform-specific Chrome path
 - **Reconnect**: `Browser::connect()` + `fetch_targets()` to discover existing pages
-- **Navigate**: `browser.new_page(url)` creates a tab at the target URL
+- **Navigate**: `page.goto(url)` (CDP `Page.navigate`) with a 10 s timeout; falls back to JS `window.location.href` + readyState polling when lifecycle events don't fire (common on reconnected sessions)
 - **Element operations**: JavaScript evaluation via `page.evaluate()` for rich element info
-- **Page selection**: Prefers non-blank pages when multiple tabs exist
+- **Page selection**: Prefers non-blank pages by CDP target URL, then falls back to JS `location.href` evaluation (handles stale target URLs after JS-based navigation)
 
 ## Error handling
 
