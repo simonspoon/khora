@@ -6,6 +6,7 @@ use futures::StreamExt;
 use khora_core::element::{BoundingBox, ConsoleMessage, ElementInfo, NetworkRequest};
 use khora_core::error::{KhoraError, KhoraResult};
 use khora_core::session::SessionInfo;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chrome::find_chrome;
@@ -14,6 +15,7 @@ use crate::chrome::find_chrome;
 pub struct CdpClient {
     browser: Browser,
     _handler_handle: tokio::task::JoinHandle<()>,
+    data_dir: Option<PathBuf>,
 }
 
 impl CdpClient {
@@ -22,8 +24,18 @@ impl CdpClient {
         let chrome_path = find_chrome()?;
         tracing::info!(?chrome_path, headless, "launching Chrome");
 
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("khora-chrome-{ts}"));
+
+        std::fs::create_dir_all(&data_dir)
+            .map_err(|e| KhoraError::LaunchFailed(format!("failed to create data dir: {e}")))?;
+
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
+            .user_data_dir(&data_dir)
             .arg("--disable-extensions")
             .arg("--disable-default-apps")
             .arg("--no-first-run")
@@ -76,11 +88,13 @@ impl CdpClient {
             pid,
             headless,
             created_at,
+            data_dir: Some(data_dir.clone()),
         };
 
         let client = Self {
             browser,
             _handler_handle: handler_handle,
+            data_dir: Some(data_dir),
         };
 
         Ok((client, session))
@@ -111,6 +125,7 @@ impl CdpClient {
         Ok(Self {
             browser,
             _handler_handle: handler_handle,
+            data_dir: None,
         })
     }
 
@@ -613,12 +628,14 @@ impl CdpClient {
         !self._handler_handle.is_finished()
     }
 
-    /// Close the browser and clean up the Chrome user data dir lock.
+    /// Close the browser and clean up the Chrome user data directory.
     pub async fn close(self) -> KhoraResult<()> {
         drop(self.browser);
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         self._handler_handle.abort();
-        cleanup_singleton_lock();
+        if let Some(ref dir) = self.data_dir {
+            cleanup_data_dir(dir);
+        }
         Ok(())
     }
 
@@ -676,11 +693,10 @@ fn get_browser_pid(_ws_url: &str) -> u32 {
     0
 }
 
-/// Remove the SingletonLock left by Chrome in chromiumoxide's fixed user data dir.
-/// Called after close() or when Chrome is already dead, to prevent stale locks.
-pub fn cleanup_singleton_lock() {
-    let lock = std::env::temp_dir()
-        .join("chromiumoxide-runner")
-        .join("SingletonLock");
-    let _ = std::fs::remove_file(&lock);
+/// Remove a Chrome user data directory.
+/// Called after close() or when Chrome is already dead, to prevent stale profile data.
+pub fn cleanup_data_dir(dir: &std::path::Path) {
+    if let Err(e) = std::fs::remove_dir_all(dir) {
+        tracing::warn!(?dir, %e, "failed to remove Chrome data dir");
+    }
 }

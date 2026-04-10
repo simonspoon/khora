@@ -17,6 +17,9 @@ pub struct SessionInfo {
     pub headless: bool,
     /// Timestamp when the session was created (Unix epoch seconds).
     pub created_at: u64,
+    /// Chrome user data directory for this session (cleaned up on close).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<PathBuf>,
 }
 
 impl SessionInfo {
@@ -103,6 +106,7 @@ mod tests {
             pid: 12345,
             headless: true,
             created_at: 1700000000,
+            data_dir: None,
         }
     }
 

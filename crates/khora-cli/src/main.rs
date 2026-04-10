@@ -393,8 +393,10 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                         let _ = client.close().await;
                     }
                     Err(_) => {
-                        // Chrome already dead — clean up lock manually
-                        khora_cdp::cleanup_singleton_lock();
+                        // Chrome already dead — clean up data dir manually
+                        if let Some(ref dir) = info.data_dir {
+                            khora_cdp::cleanup_data_dir(dir);
+                        }
                     }
                 }
                 let _ = SessionInfo::remove(&info.id);

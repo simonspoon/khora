@@ -146,6 +146,7 @@ mod tests {
             pid: 12345,
             headless: true,
             created_at: 1700000000,
+            data_dir: None,
         }
     }
 
