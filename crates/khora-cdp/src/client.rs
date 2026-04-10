@@ -27,6 +27,7 @@ impl CdpClient {
             .arg("--disable-extensions")
             .arg("--disable-default-apps")
             .arg("--no-first-run")
+            .arg("--no-default-browser-check")
             .arg("--disable-background-timer-throttling")
             .arg("--disable-backgrounding-occluded-windows");
 
@@ -38,7 +39,7 @@ impl CdpClient {
             .build()
             .map_err(|e| KhoraError::LaunchFailed(e.to_string()))?;
 
-        let (browser, mut handler) = Browser::launch(config)
+        let (mut browser, mut handler) = Browser::launch(config)
             .await
             .map_err(|e| KhoraError::LaunchFailed(e.to_string()))?;
 
@@ -51,6 +52,14 @@ impl CdpClient {
                 }
             }
         });
+
+        // Chrome's initial TargetCreated event may not have been received yet,
+        // so pages() would return empty — causing get_or_create_page() to create
+        // a second blank tab (the double-tab bug). fetch_targets() forces the
+        // handler to sync its target list. Same pattern as connect().
+        let _ = browser.fetch_targets().await;
+        // Fragile time-based guard; see upstream chromiumoxide fetch_targets docs.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Get PID from the debug info (best effort — 0 means unknown)
         let pid = get_browser_pid(&ws_url);
