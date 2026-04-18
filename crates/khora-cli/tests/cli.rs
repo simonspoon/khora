@@ -29,7 +29,41 @@ fn test_launch_help() {
         .args(["launch", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Start Chrome"));
+        .stdout(predicate::str::contains("Start Chrome"))
+        .stdout(predicate::str::contains("--window-size"))
+        .stdout(predicate::str::contains("1920x1080"));
+}
+
+#[test]
+fn test_launch_rejects_invalid_window_size_abc() {
+    khora()
+        .args(["launch", "--window-size", "abc"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_launch_rejects_invalid_window_size_missing_dim() {
+    khora()
+        .args(["launch", "--window-size", "1920"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_launch_rejects_invalid_window_size_partial_alpha() {
+    khora()
+        .args(["launch", "--window-size", "1920xabc"])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn test_launch_rejects_invalid_window_size_zero() {
+    khora()
+        .args(["launch", "--window-size", "0x0"])
+        .assert()
+        .failure();
 }
 
 #[test]

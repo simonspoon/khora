@@ -20,9 +20,12 @@ pub struct CdpClient {
 
 impl CdpClient {
     /// Launch a new Chrome instance and return a client + session info.
-    pub async fn launch(headless: bool) -> KhoraResult<(Self, SessionInfo)> {
+    pub async fn launch(
+        headless: bool,
+        window_size: (u32, u32),
+    ) -> KhoraResult<(Self, SessionInfo)> {
         let chrome_path = find_chrome()?;
-        tracing::info!(?chrome_path, headless, "launching Chrome");
+        tracing::info!(?chrome_path, headless, ?window_size, "launching Chrome");
 
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -36,6 +39,7 @@ impl CdpClient {
         let mut builder = BrowserConfig::builder()
             .chrome_executable(chrome_path)
             .user_data_dir(&data_dir)
+            .window_size(window_size.0, window_size.1)
             .arg("--disable-extensions")
             .arg("--disable-default-apps")
             .arg("--no-first-run")

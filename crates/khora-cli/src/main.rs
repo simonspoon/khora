@@ -6,6 +6,33 @@ use khora_core::OutputFormat;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WindowSize {
+    width: u32,
+    height: u32,
+}
+
+impl std::str::FromStr for WindowSize {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (w, h) = s
+            .split_once('x')
+            .ok_or_else(|| format!("expected WxH (e.g. 1920x1080), got: {s}"))?;
+        let width: u32 = w.parse().map_err(|_| format!("invalid width: {w}"))?;
+        let height: u32 = h.parse().map_err(|_| format!("invalid height: {h}"))?;
+        if width == 0 || height == 0 {
+            return Err(format!("dimensions must be > 0, got: {width}x{height}"));
+        }
+        Ok(WindowSize { width, height })
+    }
+}
+
+impl std::fmt::Display for WindowSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "khora",
@@ -42,6 +69,9 @@ enum Command {
         /// Show browser window (default is headless)
         #[arg(long)]
         visible: bool,
+        /// Chrome window size as WxH (e.g. 1920x1080)
+        #[arg(long, default_value_t = WindowSize { width: 1920, height: 1080 })]
+        window_size: WindowSize,
     },
 
     /// Navigate to a URL
@@ -188,8 +218,12 @@ async fn main() -> ExitCode {
 
 async fn run(cli: &Cli) -> Result<String, KhoraError> {
     match &cli.command {
-        Command::Launch { visible } => {
-            let (client, session) = CdpClient::launch(!visible).await?;
+        Command::Launch {
+            visible,
+            window_size,
+        } => {
+            let (client, session) =
+                CdpClient::launch(!visible, (window_size.width, window_size.height)).await?;
             session.save()?;
 
             // Install console and network hooks for this session
@@ -457,5 +491,77 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 Ok(khora_core::output::format_sessions(&sessions, cli.format))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::str::FromStr;
+
+    #[test]
+    fn parse_window_size_valid() {
+        assert_eq!(
+            WindowSize::from_str("1920x1080").unwrap(),
+            WindowSize {
+                width: 1920,
+                height: 1080
+            }
+        );
+        assert_eq!(
+            WindowSize::from_str("800x600").unwrap(),
+            WindowSize {
+                width: 800,
+                height: 600
+            }
+        );
+        assert_eq!(
+            WindowSize::from_str("1x1").unwrap(),
+            WindowSize {
+                width: 1,
+                height: 1
+            }
+        );
+    }
+
+    #[test]
+    fn parse_window_size_rejects_missing_x() {
+        assert!(WindowSize::from_str("1920").is_err());
+    }
+
+    #[test]
+    fn parse_window_size_rejects_non_numeric() {
+        assert!(WindowSize::from_str("abc").is_err());
+        assert!(WindowSize::from_str("1920xabc").is_err());
+        assert!(WindowSize::from_str("abcx1080").is_err());
+    }
+
+    #[test]
+    fn parse_window_size_rejects_empty() {
+        assert!(WindowSize::from_str("").is_err());
+    }
+
+    #[test]
+    fn parse_window_size_rejects_zero() {
+        assert!(WindowSize::from_str("0x0").is_err());
+        assert!(WindowSize::from_str("1920x0").is_err());
+        assert!(WindowSize::from_str("0x1080").is_err());
+    }
+
+    #[test]
+    fn parse_window_size_rejects_wrong_separator() {
+        assert!(WindowSize::from_str("1920X1080").is_err()); // capital X
+        assert!(WindowSize::from_str("1920*1080").is_err());
+        assert!(WindowSize::from_str("1920,1080").is_err());
+    }
+
+    #[test]
+    fn display_window_size_round_trip() {
+        let w = WindowSize {
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(w.to_string(), "1920x1080");
+        assert_eq!(WindowSize::from_str(&w.to_string()).unwrap(), w);
     }
 }
