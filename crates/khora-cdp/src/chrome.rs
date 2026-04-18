@@ -102,9 +102,14 @@ fn chrome_binary_names() -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize tests that mutate CHROME_PATH to avoid parallel races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_find_chrome_respects_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Test with a path that exists on all platforms
         let test_path = std::env::current_exe().unwrap();
         std::env::set_var("CHROME_PATH", &test_path);
@@ -116,6 +121,7 @@ mod tests {
 
     #[test]
     fn test_find_chrome_ignores_nonexistent_env() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CHROME_PATH", "/nonexistent/chrome/path/xyz");
         let result = find_chrome();
         // Should either find system Chrome or return ChromeNotFound
