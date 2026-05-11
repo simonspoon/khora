@@ -192,6 +192,16 @@ enum Command {
         /// Session ID (omit to list all sessions)
         session: Option<String>,
     },
+
+    /// Reap stale (dead-process) sessions; optionally kill live or old sessions
+    Reap {
+        /// Also kill live sessions (same as kill --all)
+        #[arg(long)]
+        all: bool,
+        /// Kill sessions older than this duration (e.g. 30m, 2h, 24h, 0s)
+        #[arg(long)]
+        older_than: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -216,7 +226,34 @@ async fn main() -> ExitCode {
     }
 }
 
+/// Parse a Go-style duration string into a `std::time::Duration`.
+/// Supported suffixes: `s` (seconds), `m` (minutes), `h` (hours).
+fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
+    if s.is_empty() {
+        return Err("empty duration".to_string());
+    }
+    let (num_str, secs_per_unit) = if let Some(n) = s.strip_suffix('s') {
+        (n, 1u64)
+    } else if let Some(n) = s.strip_suffix('m') {
+        (n, 60u64)
+    } else if let Some(n) = s.strip_suffix('h') {
+        (n, 3600u64)
+    } else {
+        return Err(format!("unsupported unit in {s:?} — use s, m, or h"));
+    };
+    let n: u64 = num_str
+        .parse()
+        .map_err(|_| format!("invalid number {num_str:?} in duration {s:?}"))?;
+    Ok(std::time::Duration::from_secs(n * secs_per_unit))
+}
+
 async fn run(cli: &Cli) -> Result<String, KhoraError> {
+    // Auto-reap dead sessions on every invocation — best effort.
+    // Skip for `reap` itself: it handles cleanup and must report what it reaped.
+    if !matches!(cli.command, Command::Reap { .. }) {
+        khora_cdp::reap_stale_sessions();
+    }
+
     match &cli.command {
         Command::Launch {
             visible,
@@ -491,6 +528,67 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 Ok(khora_core::output::format_sessions(&sessions, cli.format))
             }
         }
+
+        Command::Reap { all, older_than } => {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+
+            let age_threshold = if let Some(dur_str) = older_than {
+                let dur = parse_duration(dur_str)
+                    .map_err(|e| KhoraError::Cdp(format!("invalid --older-than: {e}")))?;
+                Some(now_secs.saturating_sub(dur.as_secs()))
+            } else {
+                None
+            };
+
+            let sessions = SessionInfo::list_all()?;
+            let mut reaped = Vec::new();
+
+            for info in &sessions {
+                let is_dead = info.pid > 0 && !khora_cdp::is_process_alive(info.pid);
+                let is_old = age_threshold.is_some_and(|threshold| info.created_at <= threshold);
+                let should_reap = is_dead || *all || is_old;
+
+                if !should_reap {
+                    continue;
+                }
+
+                if !is_dead {
+                    // Live session: attempt graceful close.
+                    match CdpClient::connect(info).await {
+                        Ok(client) => {
+                            let _ = client.close().await;
+                        }
+                        Err(_) => {
+                            if let Some(ref dir) = info.data_dir {
+                                khora_cdp::cleanup_data_dir(dir);
+                            }
+                        }
+                    }
+                } else {
+                    if let Some(ref dir) = info.data_dir {
+                        khora_cdp::cleanup_data_dir(dir);
+                    }
+                }
+
+                let _ = SessionInfo::remove(&info.id);
+                reaped.push(info.id.clone());
+            }
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!(
+                    "reaped {} sessions: {}",
+                    reaped.len(),
+                    reaped.join(", ")
+                )),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(
+                    &serde_json::json!({ "reaped": reaped }),
+                )
+                .unwrap()),
+            }
+        }
     }
 }
 
@@ -498,6 +596,46 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn parse_duration_seconds() {
+        assert_eq!(
+            parse_duration("0s").unwrap(),
+            std::time::Duration::from_secs(0)
+        );
+        assert_eq!(
+            parse_duration("30s").unwrap(),
+            std::time::Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        assert_eq!(
+            parse_duration("30m").unwrap(),
+            std::time::Duration::from_secs(1800)
+        );
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        assert_eq!(
+            parse_duration("2h").unwrap(),
+            std::time::Duration::from_secs(7200)
+        );
+        assert_eq!(
+            parse_duration("24h").unwrap(),
+            std::time::Duration::from_secs(86400)
+        );
+    }
+
+    #[test]
+    fn parse_duration_rejects_bad_input() {
+        assert!(parse_duration("").is_err());
+        assert!(parse_duration("30").is_err());
+        assert!(parse_duration("abcm").is_err());
+        assert!(parse_duration("30d").is_err());
+    }
 
     #[test]
     fn parse_window_size_valid() {

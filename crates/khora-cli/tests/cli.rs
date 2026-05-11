@@ -209,3 +209,26 @@ fn test_attribute_help() {
         .success()
         .stdout(predicate::str::contains("attribute"));
 }
+
+#[test]
+fn test_reap_no_sessions() {
+    khora().args(["reap"]).assert().success();
+}
+
+#[test]
+fn test_reap_help() {
+    khora()
+        .args(["reap", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reap"));
+}
+
+#[test]
+fn test_reap_json_format() {
+    khora()
+        .args(["--format", "json", "reap"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("reaped"));
+}

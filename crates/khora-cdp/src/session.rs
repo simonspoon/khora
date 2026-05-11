@@ -24,6 +24,27 @@ pub fn is_process_alive(pid: u32) -> bool {
     }
 }
 
+/// Reap sessions whose Chrome process has died.
+/// Called automatically at CLI startup — best effort, never errors the caller.
+pub fn reap_stale_sessions() {
+    let sessions = match SessionInfo::list_all() {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("auto-reap: failed to list sessions: {e}");
+            return;
+        }
+    };
+    for info in sessions {
+        if info.pid > 0 && !is_process_alive(info.pid) {
+            if let Some(ref dir) = info.data_dir {
+                crate::client::cleanup_data_dir(dir);
+            }
+            let _ = SessionInfo::remove(&info.id);
+            tracing::info!("auto-reaped stale session {}", info.id);
+        }
+    }
+}
+
 /// Load a session and verify it's still valid.
 pub fn load_and_verify(session_id: &str) -> KhoraResult<SessionInfo> {
     let session = SessionInfo::load(session_id)?;
@@ -35,4 +56,72 @@ pub fn load_and_verify(session_id: &str) -> KhoraResult<SessionInfo> {
     }
 
     Ok(session)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn now_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+
+    fn make_session(id: &str, pid: u32) -> SessionInfo {
+        SessionInfo {
+            id: id.to_string(),
+            ws_url: "ws://127.0.0.1:9999/devtools/browser/test".to_string(),
+            pid,
+            headless: true,
+            created_at: now_secs(),
+            data_dir: None,
+        }
+    }
+
+    #[test]
+    fn auto_reap_removes_dead_pid_session() {
+        // Spawn a short-lived process, wait for it to exit, then its PID is dead.
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        let dead_pid = child.id();
+        child.wait().ok();
+
+        let id = format!("test-dead-reap-{}", now_secs());
+        let session = make_session(&id, dead_pid);
+        if session.save().is_err() {
+            // Sessions dir not available in this environment — skip.
+            return;
+        }
+
+        reap_stale_sessions();
+
+        assert!(
+            SessionInfo::load(&id).is_err(),
+            "dead-pid session should have been reaped"
+        );
+    }
+
+    #[test]
+    fn auto_reap_preserves_live_pid_session() {
+        // Use our own PID — definitely alive.
+        let live_pid = std::process::id();
+        let id = format!("test-live-reap-{}", now_secs());
+        let session = make_session(&id, live_pid);
+        if session.save().is_err() {
+            return;
+        }
+
+        reap_stale_sessions();
+
+        assert!(
+            SessionInfo::load(&id).is_ok(),
+            "live-pid session should be preserved"
+        );
+        // Cleanup
+        let _ = SessionInfo::remove(&id);
+    }
 }
