@@ -77,8 +77,8 @@ impl CdpClient {
         // Fragile time-based guard; see upstream chromiumoxide fetch_targets docs.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
-        // Get PID from the debug info (best effort — 0 means unknown)
-        let pid = get_browser_pid(&ws_url);
+        // Capture Chrome's OS PID via the child handle (best effort — 0 means unknown)
+        let pid = get_browser_pid(&mut browser);
 
         let session_id = SessionInfo::generate_id();
         let created_at = SystemTime::now()
@@ -690,11 +690,16 @@ impl CdpClient {
     }
 }
 
-/// Extract browser PID from the WebSocket URL (best effort).
-fn get_browser_pid(_ws_url: &str) -> u32 {
-    // The PID isn't directly in the WS URL. We'll use 0 to indicate unknown.
-    // The session file will still track the session for reconnection purposes.
-    0
+/// Extract the OS PID of the launched Chrome process (best effort — 0 means unknown).
+fn get_browser_pid(browser: &mut Browser) -> u32 {
+    let pid = browser
+        .get_mut_child()
+        .and_then(|child| child.inner.id())
+        .unwrap_or(0);
+    if pid == 0 {
+        tracing::warn!("could not determine Chrome PID; auto-reap will not fire for this session");
+    }
+    pid
 }
 
 /// Remove a Chrome user data directory.

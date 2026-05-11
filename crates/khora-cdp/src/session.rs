@@ -82,6 +82,21 @@ mod tests {
     }
 
     #[test]
+    fn is_process_alive_self() {
+        assert!(is_process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn is_process_alive_fake_high_pid() {
+        assert!(!is_process_alive(9_999_999));
+    }
+
+    #[test]
+    fn is_process_alive_zero_assumes_alive() {
+        assert!(is_process_alive(0));
+    }
+
+    #[test]
     fn auto_reap_removes_dead_pid_session() {
         // Spawn a short-lived process, wait for it to exit, then its PID is dead.
         let mut child = std::process::Command::new("true")
