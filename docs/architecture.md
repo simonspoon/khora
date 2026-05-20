@@ -27,8 +27,8 @@ Platform-agnostic types shared by all crates:
 Chrome DevTools Protocol integration:
 
 - `chrome.rs` — Chrome binary discovery per platform (macOS, Linux, Windows)
-- `client.rs` — `CdpClient` wrapping chromiumoxide `Browser`
-- `session.rs` — Process liveness check, session verification
+- `client.rs` — `CdpClient` wrapping chromiumoxide `Browser`; per-launch user data dir + cleanup
+- `session.rs` — Process liveness check (`is_process_alive`), `load_and_verify`, `reap_stale_sessions` (called automatically at CLI startup)
 
 ### khora-cli
 
@@ -38,11 +38,12 @@ CLI entry point:
 
 ## Session lifecycle
 
-1. `launch` — starts Chrome via chromiumoxide, saves session JSON to `~/.khora/sessions/<id>.json`
-2. Subsequent commands — loads session file, reconnects via `Browser::connect()`, calls `fetch_targets()` to discover existing tabs
-3. `kill` — closes browser, removes session file
+1. `launch` — starts Chrome via chromiumoxide with a fresh per-session user data directory (tempdir), saves session JSON to `~/.khora/sessions/<id>.json`. The Chrome PID is recorded so dead sessions can be detected.
+2. Auto-reap — every non-`reap` CLI invocation calls `reap_stale_sessions()` first, which removes session files whose recorded PID is no longer running and deletes their data dirs. Best-effort; never fails the caller.
+3. Subsequent commands — `load_and_verify()` loads the session file and re-checks the PID; if dead, the session file is removed and `KhoraError::SessionDead` is returned. Otherwise reconnects via `Browser::connect()` and calls `fetch_targets()` to discover existing tabs.
+4. `kill` / `reap` — closes the browser (if alive), removes the user data directory, and deletes the session file.
 
-Session files contain: ID, WebSocket URL, PID, headless flag, timestamp.
+Session files contain: ID, WebSocket URL, PID, headless flag, created-at timestamp, and an optional `data_dir` path. `data_dir` is omitted from older session files (`#[serde(default)]`) so they continue to load.
 
 ## CDP integration
 

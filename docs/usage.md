@@ -45,6 +45,17 @@ khora kill "$SESSION"
 khora launch --visible
 ```
 
+### Window size
+
+The launched Chrome window defaults to `1920x1080`. Override with `--window-size`:
+
+```bash
+khora launch --window-size 1366x768
+khora launch --visible --window-size 800x600
+```
+
+Dimensions must be `WxH` with positive integers.
+
 ### Multiple sessions
 
 ```bash
@@ -55,6 +66,26 @@ khora navigate "$SESSION2" "https://app2.com"
 khora status        # lists all sessions
 khora kill --all    # kill every active session at once
 ```
+
+Each session uses its own Chrome user data directory (a unique temp dir), so concurrent sessions can't corrupt each other's profile.
+
+### Reaping stale sessions
+
+Sessions whose Chrome process exited (crash, manual kill, `pkill chrome`) leave a stale session file behind. Khora auto-reaps these on every CLI invocation, but you can also clean up explicitly:
+
+```bash
+# Remove all sessions whose Chrome process is dead
+khora reap
+
+# Remove all sessions older than a duration (s/m/h)
+khora reap --older-than 2h
+khora reap --older-than 0s   # remove every session
+
+# Also close live sessions (same as kill --all, but also reaps dead ones)
+khora reap --all
+```
+
+`--older-than` accepts suffixes `s`, `m`, `h` (e.g. `30s`, `15m`, `24h`).
 
 ## Common patterns
 
