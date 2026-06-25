@@ -39,8 +39,11 @@ khora text abc123 "h1"
 khora attribute abc123 "a" "href"
 khora wait-for abc123 ".success-message"
 
-# Screenshot
+# Screenshot (full page)
 khora screenshot abc123 -o result.png
+
+# Screenshot cropped to an element (errors if the selector matches nothing)
+khora screenshot abc123 -o button.png --selector "#submit"
 
 # Execute JavaScript
 khora eval abc123 "document.title"
@@ -70,7 +73,7 @@ khora launch --window-size 1366x768
 | `find <session> <selector>` | Find elements by CSS selector |
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |
-| `screenshot <session>` | Capture full page screenshot |
+| `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |
 | `wait-for <session> <selector>` | Wait for element to appear |

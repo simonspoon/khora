@@ -108,7 +108,8 @@ fn test_screenshot_help() {
         .args(["screenshot", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("screenshot"));
+        .stdout(predicate::str::contains("screenshot"))
+        .stdout(predicate::str::contains("--selector"));
 }
 
 #[test]

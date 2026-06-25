@@ -206,6 +206,28 @@ else
   ((FAIL++))
 fi
 
+# --selector crops to the element bounding box (smaller than full page)
+FULL_SIZE=$(wc -c <"$SCREENSHOT")
+rm -f "$SCREENSHOT"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" --selector "#heading" 2>&1)
+EC=$?
+assert_exit "screenshot --selector exits 0" "$EC" 0
+assert_file "screenshot --selector file created" "$SCREENSHOT"
+CROP_SIZE=$(wc -c <"$SCREENSHOT")
+if [ "$CROP_SIZE" -lt "$FULL_SIZE" ]; then
+  printf "  ${GREEN}PASS${NC}  cropped screenshot smaller than full page\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  cropped screenshot not smaller than full page\n"
+  ((FAIL++))
+fi
+
+# --selector with no match errors (exit 1), does not fall back to full page
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o /tmp/khora-qa-nomatch-$$.png --selector "#does-not-exist" 2>&1)
+EC=$?
+assert_exit "screenshot --selector missing errors" "$EC" 1
+assert_contains "screenshot --selector missing message" "$OUTPUT" "element not found"
+
 # ── wait-for ─────────────────────────────────────────────
 
 printf "\n${BOLD}▸ wait-for${NC}\n"

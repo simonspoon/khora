@@ -117,6 +117,15 @@ khora screenshot "$S" -o before.png
 khora screenshot "$S" -o after.png
 ```
 
+Pass `--selector` to crop the shot to a single element's bounding box instead of
+the full page. The element is scrolled into view first. If the selector matches
+nothing (or the element has no visible area) the command errors with exit code 1
+rather than silently falling back to a full-page shot.
+
+```bash
+khora screenshot "$S" -o submit-button.png --selector "#submit"
+```
+
 ### JavaScript evaluation
 
 ```bash

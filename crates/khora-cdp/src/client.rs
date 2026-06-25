@@ -1,5 +1,5 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, Viewport};
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
@@ -460,19 +460,81 @@ impl CdpClient {
         }
     }
 
-    /// Capture a full-page screenshot, returned as PNG bytes.
-    pub async fn screenshot(&self) -> KhoraResult<Vec<u8>> {
+    /// Capture a screenshot, returned as PNG bytes.
+    ///
+    /// With no `selector`, captures the full page. With a `selector`, scrolls
+    /// the first matching element into view and crops the shot to its bounding
+    /// box; returns [`KhoraError::ElementNotFound`] if nothing matches or the
+    /// element has no visible area, rather than falling back to a full-page shot.
+    pub async fn screenshot(&self, selector: Option<&str>) -> KhoraResult<Vec<u8>> {
         let page = self.get_or_create_page().await?;
+        let mut builder = ScreenshotParams::builder().format(CaptureScreenshotFormat::Png);
+        builder = match selector {
+            // capture_beyond_viewport renders the whole clip even when the
+            // element is taller/wider than the viewport; without it CDP only
+            // paints the viewport-visible part and the rest comes out blank.
+            Some(sel) => builder
+                .clip(self.element_clip(&page, sel).await?)
+                .capture_beyond_viewport(true),
+            None => builder.full_page(true),
+        };
         let png = page
-            .screenshot(
-                ScreenshotParams::builder()
-                    .format(CaptureScreenshotFormat::Png)
-                    .full_page(true)
-                    .build(),
-            )
+            .screenshot(builder.build())
             .await
             .map_err(|e| KhoraError::ScreenshotFailed(e.to_string()))?;
         Ok(png)
+    }
+
+    /// Resolve a selector to a screenshot clip rectangle in page coordinates.
+    ///
+    /// Done by JS evaluation (per project convention) so the clip is computed
+    /// the same way as other element ops. Returns [`KhoraError::ElementNotFound`]
+    /// if the selector matches nothing or the element has zero area.
+    async fn element_clip(&self, page: &Page, selector: &str) -> KhoraResult<Viewport> {
+        // Return an array ([] = no match) rather than null: chromiumoxide's
+        // into_value() fails on a bare JS null, but parses arrays fine (see
+        // find_elements). This is what makes the not-found case detectable.
+        let js = format!(
+            r#"
+            (() => {{
+                const el = document.querySelector({selector});
+                if (!el) return [];
+                el.scrollIntoView({{ block: 'center', inline: 'center' }});
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0) return [];
+                return [{{
+                    x: rect.left + window.scrollX,
+                    y: rect.top + window.scrollY,
+                    width: rect.width,
+                    height: rect.height,
+                }}];
+            }})()
+            "#,
+            selector = serde_json::to_string(selector).unwrap_or_default()
+        );
+
+        let value = page
+            .evaluate(js)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let bb = match value {
+            serde_json::Value::Array(arr) if !arr.is_empty() => {
+                serde_json::from_value::<BoundingBox>(arr.into_iter().next().unwrap())
+                    .map_err(|e| KhoraError::Cdp(e.to_string()))?
+            }
+            _ => return Err(KhoraError::ElementNotFound(selector.to_string())),
+        };
+
+        Ok(Viewport {
+            x: bb.x,
+            y: bb.y,
+            width: bb.width,
+            height: bb.height,
+            scale: 1.0,
+        })
     }
 
     /// Read console messages from the page.

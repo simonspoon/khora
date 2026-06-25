@@ -115,6 +115,9 @@ enum Command {
         /// Output file path (default: khora-screenshot.png)
         #[arg(long, short)]
         output: Option<String>,
+        /// CSS selector to crop the shot to; errors if it matches nothing
+        #[arg(long, short)]
+        selector: Option<String>,
     },
 
     /// Get text content of matching elements
@@ -333,10 +336,14 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             }
         }
 
-        Command::Screenshot { session, output } => {
+        Command::Screenshot {
+            session,
+            output,
+            selector,
+        } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            let png_bytes = client.screenshot().await?;
+            let png_bytes = client.screenshot(selector.as_deref()).await?;
 
             let path = PathBuf::from(output.as_deref().unwrap_or("khora-screenshot.png"));
             std::fs::write(&path, &png_bytes)?;
