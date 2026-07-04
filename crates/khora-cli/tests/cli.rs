@@ -213,6 +213,43 @@ fn test_attribute_help() {
 }
 
 #[test]
+fn test_set_viewport_help() {
+    khora()
+        .args(["set-viewport", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("viewport"))
+        .stdout(predicate::str::contains("--mobile"));
+}
+
+#[test]
+fn test_set_viewport_nonexistent_session() {
+    khora()
+        .args(["set-viewport", "nonexistent_xyz", "390x844"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_set_viewport_rejects_invalid_size() {
+    khora()
+        .args(["set-viewport", "nonexistent_xyz", "390"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("WxH"));
+}
+
+#[test]
+fn test_set_viewport_rejects_negative_dpr() {
+    khora()
+        .args(["set-viewport", "nonexistent_xyz", "390x844", "--", "-1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("dpr"));
+}
+
+#[test]
 fn test_reap_no_sessions() {
     khora().args(["reap"]).assert().success();
 }

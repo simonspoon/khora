@@ -56,6 +56,24 @@ khora launch --visible --window-size 800x600
 
 Dimensions must be `WxH` with positive integers.
 
+### Phone-width viewports
+
+Headless Chrome clamps the window to a ~500px minimum inner width, so
+`launch --window-size 390x844` can't produce a phone-width page. Use
+`set-viewport` instead — it overrides the page's viewport metrics directly
+(CDP `Emulation.setDeviceMetricsOverride`):
+
+```bash
+khora set-viewport "$S" 390x844              # iPhone 14 Pro sized viewport
+khora set-viewport "$S" 390x844 3 --mobile   # + device pixel ratio 3, mobile emulation
+khora eval "$S" "window.innerWidth"          # → 390
+```
+
+The size override sticks for the life of the Chrome session, across later
+khora commands and navigations. The `dpr` and `--mobile` parts of the
+override are applied but can reset once the invocation disconnects —
+rely on the width/height, not on `devicePixelRatio`, in later commands.
+
 ### Multiple sessions
 
 ```bash

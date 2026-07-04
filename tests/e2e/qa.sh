@@ -272,6 +272,22 @@ assert_contains "network captured fetch" "$OUTPUT" "fetch"
 assert_contains "network captured xhr" "$OUTPUT" "xhr"
 assert_contains "network has POST method" "$OUTPUT" "POST"
 
+# ── set-viewport ─────────────────────────────────────────
+
+printf "\n${BOLD}▸ set-viewport${NC}\n"
+OUTPUT=$("$KHORA" set-viewport "$SESSION" 390x844 3 --mobile 2>&1)
+EC=$?
+assert_exit "set-viewport exits 0" "$EC" 0
+assert_contains "set-viewport reports size" "$OUTPUT" "390x844"
+
+OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
+assert_contains "viewport width applied (below headless ~500px clamp)" "$OUTPUT" "390"
+
+# Size override persists across navigation
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
+assert_contains "viewport persists across navigate" "$OUTPUT" "390"
+
 # ── JSON output format ──────────────────────────────────
 
 printf "\n${BOLD}▸ JSON format${NC}\n"

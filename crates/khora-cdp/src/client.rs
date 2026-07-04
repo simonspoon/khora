@@ -1,4 +1,5 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
 };
@@ -550,6 +551,33 @@ impl CdpClient {
             height: bb.height,
             scale: 1.0,
         })
+    }
+
+    /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.
+    ///
+    /// Headless Chrome clamps `launch --window-size` to a ~500px minimum inner
+    /// width, so phone-width QA (375-430px) needs a metrics override instead.
+    /// `dpr` 0.0 keeps the current device scale factor; `mobile` enables
+    /// mobile emulation (meta-viewport handling, mobile UA hints).
+    pub async fn set_viewport(
+        &self,
+        width: u32,
+        height: u32,
+        dpr: f64,
+        mobile: bool,
+    ) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let params = SetDeviceMetricsOverrideParams::builder()
+            .width(width as i64)
+            .height(height as i64)
+            .device_scale_factor(dpr)
+            .mobile(mobile)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        page.execute(params)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
     }
 
     /// Read console messages from the page.

@@ -85,6 +85,20 @@ enum Command {
         no_cache: bool,
     },
 
+    /// Override the viewport size (CDP Emulation.setDeviceMetricsOverride)
+    SetViewport {
+        /// Session ID
+        session: String,
+        /// Viewport size as WxH (e.g. 390x844)
+        size: WindowSize,
+        /// Device pixel ratio (0 keeps the current value)
+        #[arg(default_value_t = 0.0, value_parser = parse_dpr)]
+        dpr: f64,
+        /// Emulate a mobile device (meta-viewport handling, mobile UA hints)
+        #[arg(long)]
+        mobile: bool,
+    },
+
     /// Find elements by CSS selector
     Find {
         /// Session ID
@@ -253,6 +267,15 @@ fn parse_duration(s: &str) -> Result<std::time::Duration, String> {
     Ok(std::time::Duration::from_secs(n * secs_per_unit))
 }
 
+/// Parse a device pixel ratio argument: a non-negative float (0 = keep current).
+fn parse_dpr(s: &str) -> Result<f64, String> {
+    let dpr: f64 = s.parse().map_err(|_| format!("invalid dpr: {s}"))?;
+    if !dpr.is_finite() || dpr < 0.0 {
+        return Err(format!("dpr must be >= 0, got: {s}"));
+    }
+    Ok(dpr)
+}
+
 async fn run(cli: &Cli) -> Result<String, KhoraError> {
     // Auto-reap dead sessions on every invocation — best effort.
     // Skip for `reap` itself: it handles cleanup and must report what it reaped.
@@ -304,6 +327,40 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(
                     &serde_json::json!({ "action": "navigate", "url": url, "no_cache": no_cache }),
                 )
+                .unwrap()),
+            }
+        }
+
+        Command::SetViewport {
+            session,
+            size,
+            dpr,
+            mobile,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client
+                .set_viewport(size.width, size.height, *dpr, *mobile)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => {
+                    let mut msg = format!("Viewport set: {size}");
+                    if *dpr > 0.0 {
+                        msg.push_str(&format!(" dpr={dpr}"));
+                    }
+                    if *mobile {
+                        msg.push_str(" (mobile)");
+                    }
+                    Ok(msg)
+                }
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "set_viewport",
+                    "width": size.width,
+                    "height": size.height,
+                    "dpr": dpr,
+                    "mobile": mobile,
+                }))
                 .unwrap()),
             }
         }
@@ -711,6 +768,23 @@ mod tests {
         assert!(WindowSize::from_str("1920X1080").is_err()); // capital X
         assert!(WindowSize::from_str("1920*1080").is_err());
         assert!(WindowSize::from_str("1920,1080").is_err());
+    }
+
+    #[test]
+    fn parse_dpr_valid() {
+        assert_eq!(parse_dpr("0").unwrap(), 0.0);
+        assert_eq!(parse_dpr("1").unwrap(), 1.0);
+        assert_eq!(parse_dpr("2.5").unwrap(), 2.5);
+        assert_eq!(parse_dpr("3").unwrap(), 3.0);
+    }
+
+    #[test]
+    fn parse_dpr_rejects_bad_input() {
+        assert!(parse_dpr("").is_err());
+        assert!(parse_dpr("abc").is_err());
+        assert!(parse_dpr("-1").is_err());
+        assert!(parse_dpr("inf").is_err());
+        assert!(parse_dpr("NaN").is_err());
     }
 
     #[test]
