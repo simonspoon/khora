@@ -137,6 +137,25 @@ khora click "$S" "button[type=submit]"
 khora wait-for "$S" ".dashboard"
 ```
 
+### Drag interactions
+
+`drag` dispatches trusted native mouse events (CDP `Input.dispatchMouseEvent`):
+press at the start point, evenly spaced moves along the line, release at the
+end point. Use it for interactions that JS-synthesized events can't drive —
+crop marquees, sliders, drag handles — because pages can check `isTrusted`.
+Coordinates are viewport CSS pixels; get them from `find`'s bounding box or
+`eval` with `getBoundingClientRect()`.
+
+```bash
+khora find "$S" ".crop-area"            # read the bounding box
+khora drag "$S" 100,150 300,400          # marquee-select from 100,150 to 300,400
+khora drag "$S" 50,200 250,200 --steps 25 --delay 30   # slower, finer drag
+```
+
+`--steps` (default 10) sets how many intermediate move events fire; `--delay`
+(default 16 ms, one frame) is the pause between events so frameworks that
+batch on animation frames see the motion.
+
 ### Screenshot comparison
 
 ```bash

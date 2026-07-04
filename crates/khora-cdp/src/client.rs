@@ -1,5 +1,8 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+use chromiumoxide::cdp::browser_protocol::input::{
+    DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
+};
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
 };
@@ -551,6 +554,59 @@ impl CdpClient {
             height: bb.height,
             scale: 1.0,
         })
+    }
+
+    /// Drag from one viewport point to another with trusted mouse events
+    /// (CDP Input.dispatchMouseEvent: press, interpolated moves, release).
+    ///
+    /// Unlike the JS-evaluation element ops, this must use native CDP input:
+    /// drag interactions (crop marquees, sliders, drag handles) check
+    /// `isTrusted` or track real pointer state, which synthetic JS events
+    /// can't satisfy. `steps` mouseMoved events are spread evenly along the
+    /// line, ending exactly at `to`; `delay_ms` sleeps between events give
+    /// frameworks that batch on animation frames (e.g. React) a chance to
+    /// observe the motion.
+    pub async fn drag(
+        &self,
+        from: (f64, f64),
+        to: (f64, f64),
+        steps: u32,
+        delay_ms: u64,
+    ) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let delay = std::time::Duration::from_millis(delay_ms);
+
+        let event = |kind: DispatchMouseEventType, x: f64, y: f64| {
+            DispatchMouseEventParams::builder()
+                .r#type(kind)
+                .x(x)
+                .y(y)
+                .button(MouseButton::Left)
+                .buttons(1)
+                .click_count(1)
+                .build()
+                .map_err(KhoraError::Cdp)
+        };
+
+        page.execute(event(DispatchMouseEventType::MousePressed, from.0, from.1)?)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        for i in 1..=steps {
+            tokio::time::sleep(delay).await;
+            let t = f64::from(i) / f64::from(steps);
+            let x = from.0 + (to.0 - from.0) * t;
+            let y = from.1 + (to.1 - from.1) * t;
+            page.execute(event(DispatchMouseEventType::MouseMoved, x, y)?)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+
+        tokio::time::sleep(delay).await;
+        page.execute(event(DispatchMouseEventType::MouseReleased, to.0, to.1)?)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
     }
 
     /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.

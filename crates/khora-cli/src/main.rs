@@ -33,6 +33,33 @@ impl std::fmt::Display for WindowSize {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Point {
+    x: f64,
+    y: f64,
+}
+
+impl std::str::FromStr for Point {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (x, y) = s
+            .split_once(',')
+            .ok_or_else(|| format!("expected X,Y (e.g. 100,250), got: {s}"))?;
+        let x: f64 = x.trim().parse().map_err(|_| format!("invalid x: {x}"))?;
+        let y: f64 = y.trim().parse().map_err(|_| format!("invalid y: {y}"))?;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(format!("coordinates must be finite, got: {s}"));
+        }
+        Ok(Point { x, y })
+    }
+}
+
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{},{}", self.x, self.y)
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "khora",
@@ -123,6 +150,24 @@ enum Command {
         selector: String,
         /// Text to type
         text: String,
+    },
+
+    /// Drag from one point to another with trusted mouse events (CDP Input.dispatchMouseEvent)
+    Drag {
+        /// Session ID
+        session: String,
+        /// Start point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        from: Point,
+        /// End point as X,Y in viewport CSS pixels
+        #[arg(allow_hyphen_values = true)]
+        to: Point,
+        /// Number of intermediate mouse-move events along the path
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
+        steps: u32,
+        /// Delay between mouse events in milliseconds
+        #[arg(long, default_value_t = 16)]
+        delay: u64,
     },
 
     /// Capture a screenshot
@@ -401,6 +446,32 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     "action": "type",
                     "selector": selector,
                     "text": text,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Drag {
+            session,
+            from,
+            to,
+            steps,
+            delay,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client
+                .drag((from.x, from.y), (to.x, to.y), *steps, *delay)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Dragged: {from} -> {to} ({steps} steps)")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "drag",
+                    "from": { "x": from.x, "y": from.y },
+                    "to": { "x": to.x, "y": to.y },
+                    "steps": steps,
+                    "delay_ms": delay,
                 }))
                 .unwrap()),
             }
@@ -785,6 +856,40 @@ mod tests {
         assert!(parse_dpr("-1").is_err());
         assert!(parse_dpr("inf").is_err());
         assert!(parse_dpr("NaN").is_err());
+    }
+
+    #[test]
+    fn parse_point_valid() {
+        assert_eq!(
+            Point::from_str("100,250").unwrap(),
+            Point { x: 100.0, y: 250.0 }
+        );
+        assert_eq!(
+            Point::from_str("10.5, 20.25").unwrap(),
+            Point { x: 10.5, y: 20.25 }
+        );
+        assert_eq!(
+            Point::from_str("-5,10").unwrap(),
+            Point { x: -5.0, y: 10.0 }
+        );
+        assert_eq!(Point::from_str("0,0").unwrap(), Point { x: 0.0, y: 0.0 });
+    }
+
+    #[test]
+    fn parse_point_rejects_bad_input() {
+        assert!(Point::from_str("").is_err());
+        assert!(Point::from_str("100").is_err());
+        assert!(Point::from_str("abc,10").is_err());
+        assert!(Point::from_str("10,abc").is_err());
+        assert!(Point::from_str("10x20").is_err());
+        assert!(Point::from_str("inf,10").is_err());
+        assert!(Point::from_str("NaN,10").is_err());
+    }
+
+    #[test]
+    fn display_point_round_trip() {
+        let p = Point { x: 100.0, y: 250.5 };
+        assert_eq!(Point::from_str(&p.to_string()).unwrap(), p);
     }
 
     #[test]

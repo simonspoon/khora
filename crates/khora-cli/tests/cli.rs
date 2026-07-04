@@ -104,6 +104,43 @@ fn test_type_help() {
 }
 
 #[test]
+fn test_drag_help() {
+    khora()
+        .args(["drag", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Drag"))
+        .stdout(predicate::str::contains("--steps"))
+        .stdout(predicate::str::contains("--delay"));
+}
+
+#[test]
+fn test_drag_nonexistent_session() {
+    khora()
+        .args(["drag", "nonexistent_xyz", "0,0", "10,10"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_drag_rejects_invalid_point() {
+    khora()
+        .args(["drag", "nonexistent_xyz", "abc", "10,10"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
+fn test_drag_rejects_zero_steps() {
+    khora()
+        .args(["drag", "nonexistent_xyz", "0,0", "10,10", "--steps", "0"])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn test_screenshot_help() {
     khora()
         .args(["screenshot", "--help"])

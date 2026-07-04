@@ -74,6 +74,7 @@ khora launch --window-size 1366x768
 | `find <session> <selector>` | Find elements by CSS selector |
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |
+| `drag <session> <from> <to>` | Drag with trusted mouse events between `X,Y` points (`--steps`, `--delay` ms) |
 | `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

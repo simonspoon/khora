@@ -27,6 +27,10 @@
   <!-- network test: triggers a fetch and XHR -->
   <button id="network-btn">Fire Requests</button>
 
+  <!-- drag test: records trusted press-move-release path -->
+  <div id="drag-zone" style="width: 300px; height: 120px; border: 1px solid #888;">Drag here</div>
+  <div id="drag-result"></div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -71,6 +75,24 @@
       xhr.open('POST', url);
       xhr.addEventListener('load', function() { console.log('xhr-done'); });
       xhr.send('test');
+    });
+
+    // Drag test: record press point, move count, and trusted release point
+    var dragging = false, dragMoves = 0, dragStart = '';
+    document.getElementById('drag-zone').addEventListener('mousedown', function(e) {
+      dragging = true;
+      dragMoves = 0;
+      dragStart = Math.round(e.clientX) + ',' + Math.round(e.clientY);
+    });
+    document.addEventListener('mousemove', function() {
+      if (dragging) dragMoves++;
+    });
+    document.addEventListener('mouseup', function(e) {
+      if (!dragging) return;
+      dragging = false;
+      document.getElementById('drag-result').textContent =
+        'drag:' + dragStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
+        ' moves:' + dragMoves + ' trusted:' + e.isTrusted;
     });
 
     // Eval test value

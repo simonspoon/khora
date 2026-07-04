@@ -21,7 +21,7 @@ SCREENSHOT="/tmp/khora-qa-screenshot-$$.png"
 
 assert_contains() {
   local label="$1" actual="$2" expected="$3"
-  if echo "$actual" | grep -qF "$expected"; then
+  if echo "$actual" | grep -qF -- "$expected"; then
     printf "  ${GREEN}PASS${NC}  %s\n" "$label"
     ((PASS++))
   else
@@ -178,6 +178,23 @@ assert_exit "click exits 0" "$EC" 0
 
 OUTPUT=$("$KHORA" text "$SESSION" "#counter-btn" 2>&1)
 assert_contains "click updated button text" "$OUTPUT" "Clicked 1"
+
+# ── drag ─────────────────────────────────────────────────
+
+printf "\n${BOLD}▸ drag${NC}\n"
+# Resolve drag-zone corners at runtime — fixture layout may shift
+POINTS=$("$KHORA" eval "$SESSION" "var r=document.getElementById('drag-zone').getBoundingClientRect(); Math.round(r.x+10)+','+Math.round(r.y+10)+' '+Math.round(r.x+250)+','+Math.round(r.y+80)" 2>&1)
+FROM="${POINTS% *}"
+TO="${POINTS#* }"
+OUTPUT=$("$KHORA" drag "$SESSION" "$FROM" "$TO" --steps 8 2>&1)
+EC=$?
+assert_exit "drag exits 0" "$EC" 0
+assert_contains "drag reports path" "$OUTPUT" "8 steps"
+
+OUTPUT=$("$KHORA" text "$SESSION" "#drag-result" 2>&1)
+assert_contains "drag events are trusted" "$OUTPUT" "trusted:true"
+assert_contains "drag dispatched all moves" "$OUTPUT" "moves:8"
+assert_contains "drag released at target" "$OUTPUT" "->$TO"
 
 # ── console ──────────────────────────────────────────────
 
