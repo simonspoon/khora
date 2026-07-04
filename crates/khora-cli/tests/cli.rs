@@ -72,7 +72,8 @@ fn test_navigate_help() {
         .args(["navigate", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Navigate to a URL"));
+        .stdout(predicate::str::contains("Navigate to a URL"))
+        .stdout(predicate::str::contains("--no-cache"));
 }
 
 #[test]

@@ -117,6 +117,15 @@ assert_exit "navigate exits 0" "$EC" 0
 # Small settle time for page scripts to initialize
 sleep 0.3
 
+# ── navigate --no-cache ─────────────────────────────────
+
+printf "\n${BOLD}▸ navigate --no-cache${NC}\n"
+OUTPUT=$("$KHORA" navigate "$SESSION" "$FIXTURE" --no-cache 2>&1)
+EC=$?
+assert_exit "navigate --no-cache exits 0" "$EC" 0
+assert_contains "navigate --no-cache reports bypass" "$OUTPUT" "cache bypassed"
+sleep 0.3
+
 # ── find (single element) ───────────────────────────────
 
 printf "\n${BOLD}▸ find${NC}\n"

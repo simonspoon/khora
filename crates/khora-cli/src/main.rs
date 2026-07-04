@@ -80,6 +80,9 @@ enum Command {
         session: String,
         /// URL to navigate to
         url: String,
+        /// Bypass the browser cache for this navigation (CDP Network.setCacheDisabled)
+        #[arg(long)]
+        no_cache: bool,
     },
 
     /// Find elements by CSS selector
@@ -281,15 +284,25 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             Ok(khora_core::output::format_session(&session, cli.format))
         }
 
-        Command::Navigate { session, url } => {
+        Command::Navigate {
+            session,
+            url,
+            no_cache,
+        } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.navigate(url).await?;
+            client.navigate(url, *no_cache).await?;
 
             match cli.format {
-                OutputFormat::Text => Ok(format!("Navigated to: {url}")),
+                OutputFormat::Text => {
+                    if *no_cache {
+                        Ok(format!("Navigated to: {url} (cache bypassed)"))
+                    } else {
+                        Ok(format!("Navigated to: {url}"))
+                    }
+                }
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(
-                    &serde_json::json!({ "action": "navigate", "url": url }),
+                    &serde_json::json!({ "action": "navigate", "url": url, "no_cache": no_cache }),
                 )
                 .unwrap()),
             }

@@ -1,4 +1,7 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::network::{
+    EnableParams as NetworkEnableParams, SetCacheDisabledParams,
+};
 use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, Viewport};
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
@@ -138,8 +141,20 @@ impl CdpClient {
     /// so subsequent connections can find the page. Falls back to JS-based
     /// navigation if goto() hangs (lifecycle events may not fire on reconnected
     /// sessions).
-    pub async fn navigate(&self, url: &str) -> KhoraResult<()> {
+    pub async fn navigate(&self, url: &str, no_cache: bool) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
+
+        if no_cache {
+            // setCacheDisabled only applies while the Network domain is enabled
+            // on this CDP session, so enable it first. The state ends when this
+            // invocation disconnects — enough to cover the navigation below.
+            page.execute(NetworkEnableParams::default())
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            page.execute(SetCacheDisabledParams::new(true))
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
 
         // Try CDP Page.navigate via goto() with a timeout
         let goto_result =

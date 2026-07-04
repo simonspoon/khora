@@ -69,7 +69,7 @@ khora launch --window-size 1366x768
 | Command | Description |
 |---------|-------------|
 | `launch` | Start Chrome (headless by default, `--visible` for headed, `--window-size WxH`) |
-| `navigate <session> <url>` | Go to a URL |
+| `navigate <session> <url>` | Go to a URL (`--no-cache` to bypass the browser cache) |
 | `find <session> <selector>` | Find elements by CSS selector |
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |

@@ -98,6 +98,17 @@ khora wait-for "$S" ".data-loaded"  # Wait for dynamic content
 khora text "$S" ".user-count"  # Read a value
 ```
 
+### Fresh assets after a rebuild
+
+Chrome's cache can keep serving an old `index.html` (and its old hashed
+bundles) after you rebuild your app. Pass `--no-cache` to bypass the browser
+cache for that navigation (CDP `Network.setCacheDisabled`) instead of
+resorting to `?bust=$RANDOM` query params:
+
+```bash
+khora navigate "$S" "http://localhost:5173" --no-cache
+```
+
 ### Form interaction
 
 ```bash
