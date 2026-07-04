@@ -280,7 +280,17 @@ async fn main() -> ExitCode {
     match run(&cli).await {
         Ok(output) => {
             if !output.is_empty() {
-                println!("{output}");
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                if let Err(e) = writeln!(stdout, "{output}").and_then(|()| stdout.flush()) {
+                    // Reader of our pipe exited (e.g. `khora ... | jq -r .id`):
+                    // not our error, exit quietly instead of panicking.
+                    if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        return ExitCode::SUCCESS;
+                    }
+                    eprintln!("error: {e}");
+                    return ExitCode::FAILURE;
+                }
             }
             ExitCode::SUCCESS
         }

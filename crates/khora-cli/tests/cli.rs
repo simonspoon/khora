@@ -174,6 +174,27 @@ fn test_status_no_sessions() {
 }
 
 #[test]
+fn test_broken_pipe_exits_quietly() {
+    use std::process::{Command as StdCommand, Stdio};
+    // `status` always prints ("No active sessions." at minimum). Closing our
+    // end of the pipe before the child writes forces EPIPE on its stdout.
+    let mut child = StdCommand::new(assert_cmd::cargo::cargo_bin("khora"))
+        .arg("status")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+        "khora panicked on EPIPE: {stderr}"
+    );
+    assert!(out.status.success(), "expected quiet success, got {out:?}");
+}
+
+#[test]
 fn test_status_nonexistent_session() {
     khora()
         .args(["status", "nonexistent_xyz"])
