@@ -57,8 +57,9 @@ pub fn format_elements(elements: &[ElementInfo], format: OutputFormat) -> String
                 let mut parts = vec![format!("<{}>", el.tag_name)];
                 if let Some(ref text) = el.text {
                     if !text.is_empty() {
-                        let truncated = if text.len() > 60 {
-                            format!("{}...", &text[..57])
+                        let truncated = if text.chars().count() > 60 {
+                            let cut: String = text.chars().take(57).collect();
+                            format!("{cut}...")
                         } else {
                             text.clone()
                         };
@@ -179,6 +180,22 @@ mod tests {
             format_elements(&[], OutputFormat::Text),
             "No elements found."
         );
+    }
+
+    #[test]
+    fn test_format_elements_truncates_multibyte_text_on_char_boundary() {
+        let elements = vec![ElementInfo {
+            selector: "a".to_string(),
+            tag_name: "a".to_string(),
+            text: Some("→".repeat(80)),
+            attributes: None,
+            bounding_box: None,
+            visible: true,
+            match_count: 1,
+            match_index: 0,
+        }];
+        let output = format_elements(&elements, OutputFormat::Text);
+        assert!(output.contains(&format!("{}...", "→".repeat(57))));
     }
 
     #[test]
