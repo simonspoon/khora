@@ -31,6 +31,10 @@
   <div id="drag-zone" style="width: 300px; height: 120px; border: 1px solid #888;">Drag here</div>
   <div id="drag-result"></div>
 
+  <!-- drag test: setPointerCapture-guarded handler (splitter pattern) -->
+  <div id="splitter" style="width: 300px; height: 40px; border: 1px solid #888;">Splitter</div>
+  <div id="splitter-result"></div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -93,6 +97,27 @@
       document.getElementById('drag-result').textContent =
         'drag:' + dragStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
         ' moves:' + dragMoves + ' trusted:' + e.isTrusted;
+    });
+
+    // Splitter drag: only moves while the element holds pointer capture,
+    // like real splitter/slider widgets. Untrusted synthetic pointer events
+    // never satisfy hasPointerCapture, so only trusted input can drive this.
+    var splitter = document.getElementById('splitter');
+    var capMoves = 0, capStart = '';
+    splitter.addEventListener('pointerdown', function(e) {
+      splitter.setPointerCapture(e.pointerId);
+      capMoves = 0;
+      capStart = Math.round(e.clientX) + ',' + Math.round(e.clientY);
+    });
+    splitter.addEventListener('pointermove', function(e) {
+      if (splitter.hasPointerCapture(e.pointerId)) capMoves++;
+    });
+    splitter.addEventListener('pointerup', function(e) {
+      var captured = splitter.hasPointerCapture(e.pointerId);
+      splitter.releasePointerCapture(e.pointerId);
+      document.getElementById('splitter-result').textContent =
+        'capdrag:' + capStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
+        ' capmoves:' + capMoves + ' captured:' + captured + ' trusted:' + e.isTrusted;
     });
 
     // Eval test value

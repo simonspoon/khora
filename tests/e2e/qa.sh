@@ -196,6 +196,20 @@ assert_contains "drag events are trusted" "$OUTPUT" "trusted:true"
 assert_contains "drag dispatched all moves" "$OUTPUT" "moves:8"
 assert_contains "drag released at target" "$OUTPUT" "->$TO"
 
+# Pointer-capture-guarded drag (splitter pattern): only trusted input
+# satisfies hasPointerCapture, so this proves drag drives real widgets.
+POINTS=$("$KHORA" eval "$SESSION" "var r=document.getElementById('splitter').getBoundingClientRect(); Math.round(r.x+10)+','+Math.round(r.y+20)+' '+Math.round(r.x+250)+','+Math.round(r.y+20)" 2>&1)
+FROM="${POINTS% *}"
+TO="${POINTS#* }"
+OUTPUT=$("$KHORA" drag "$SESSION" "$FROM" "$TO" --steps 6 2>&1)
+EC=$?
+assert_exit "capture drag exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#splitter-result" 2>&1)
+assert_contains "capture drag held pointer capture" "$OUTPUT" "captured:true"
+assert_contains "capture drag moves seen under capture" "$OUTPUT" "capmoves:6"
+assert_contains "capture drag events are trusted" "$OUTPUT" "trusted:true"
+
 # ── console ──────────────────────────────────────────────
 
 printf "\n${BOLD}▸ console${NC}\n"
