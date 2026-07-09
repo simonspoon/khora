@@ -284,7 +284,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const el = document.querySelector({selector});
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ found: false, error: e.message }};
+                }}
                 if (!el) return {{ found: false }};
                 el.click();
                 return {{ found: true }};
@@ -303,6 +308,11 @@ impl CdpClient {
             .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
             return Err(KhoraError::ElementNotFound(selector.to_string()));
         }
         Ok(())
