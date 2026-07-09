@@ -210,7 +210,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const els = document.querySelectorAll({selector});
+                let els;
+                try {{
+                    els = document.querySelectorAll({selector});
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
                 const count = els.length;
                 return Array.from(els).map((el, i) => {{
                     const rect = el.getBoundingClientRect();
@@ -244,6 +249,14 @@ impl CdpClient {
 
         let elements: Vec<serde_json::Value> = match value {
             serde_json::Value::Array(arr) => arr,
+            serde_json::Value::Object(ref obj) => {
+                if let Some(err) = obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(KhoraError::JavaScriptError(format!(
+                        "invalid selector {selector:?}: {err}"
+                    )));
+                }
+                return Err(KhoraError::ElementNotFound(selector.to_string()));
+            }
             _ => return Err(KhoraError::ElementNotFound(selector.to_string())),
         };
 
@@ -327,7 +340,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const el = document.querySelector({selector});
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ found: false, error: e.message }};
+                }}
                 if (!el) return {{ found: false }};
                 el.focus();
                 el.value = {text};
@@ -350,6 +368,11 @@ impl CdpClient {
             .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
             return Err(KhoraError::ElementNotFound(selector.to_string()));
         }
         Ok(())
@@ -361,7 +384,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const els = document.querySelectorAll({selector});
+                let els;
+                try {{
+                    els = document.querySelectorAll({selector});
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
                 if (els.length === 0) return null;
                 return Array.from(els).map(el => el.textContent?.trim() || "");
             }})()
@@ -384,6 +412,14 @@ impl CdpClient {
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect()),
             serde_json::Value::Null => Err(KhoraError::ElementNotFound(selector.to_string())),
+            serde_json::Value::Object(ref obj) => {
+                if let Some(err) = obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(KhoraError::JavaScriptError(format!(
+                        "invalid selector {selector:?}: {err}"
+                    )));
+                }
+                Err(KhoraError::ElementNotFound(selector.to_string()))
+            }
             _ => Ok(vec![value.to_string()]),
         }
     }
@@ -398,7 +434,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const el = document.querySelector({selector});
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ found: false, error: e.message }};
+                }}
                 if (!el) return {{ found: false }};
                 const val = el.getAttribute({attribute});
                 return {{ found: true, value: val }};
@@ -418,6 +459,11 @@ impl CdpClient {
             .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
             return Err(KhoraError::ElementNotFound(selector.to_string()));
         }
 
@@ -526,7 +572,12 @@ impl CdpClient {
         let js = format!(
             r#"
             (() => {{
-                const el = document.querySelector({selector});
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
                 if (!el) return [];
                 el.scrollIntoView({{ block: 'center', inline: 'center' }});
                 const rect = el.getBoundingClientRect();
@@ -553,6 +604,14 @@ impl CdpClient {
             serde_json::Value::Array(arr) if !arr.is_empty() => {
                 serde_json::from_value::<BoundingBox>(arr.into_iter().next().unwrap())
                     .map_err(|e| KhoraError::Cdp(e.to_string()))?
+            }
+            serde_json::Value::Object(ref obj) => {
+                if let Some(err) = obj.get("error").and_then(|v| v.as_str()) {
+                    return Err(KhoraError::JavaScriptError(format!(
+                        "invalid selector {selector:?}: {err}"
+                    )));
+                }
+                return Err(KhoraError::ElementNotFound(selector.to_string()));
             }
             _ => return Err(KhoraError::ElementNotFound(selector.to_string())),
         };
