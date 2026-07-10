@@ -477,7 +477,15 @@ impl CdpClient {
     pub async fn wait_for(&self, selector: &str, timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
-            r#"document.querySelector({selector}) !== null"#,
+            r#"
+            (() => {{
+                try {{
+                    return {{ found: document.querySelector({selector}) !== null }};
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
+            }})()
+            "#,
             selector = serde_json::to_string(selector).unwrap_or_default()
         );
 
@@ -490,10 +498,18 @@ impl CdpClient {
                 .await
                 .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
-            if let Ok(found) = result.into_value::<bool>() {
-                if found {
-                    return Ok(());
-                }
+            let value: serde_json::Value = result
+                .into_value()
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
+
+            if value.get("found").and_then(|v| v.as_bool()) == Some(true) {
+                return Ok(());
             }
 
             if start.elapsed() >= timeout {
@@ -508,7 +524,15 @@ impl CdpClient {
     pub async fn wait_gone(&self, selector: &str, timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
-            r#"document.querySelector({selector}) === null"#,
+            r#"
+            (() => {{
+                try {{
+                    return {{ gone: document.querySelector({selector}) === null }};
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
+            }})()
+            "#,
             selector = serde_json::to_string(selector).unwrap_or_default()
         );
 
@@ -521,10 +545,18 @@ impl CdpClient {
                 .await
                 .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
-            if let Ok(gone) = result.into_value::<bool>() {
-                if gone {
-                    return Ok(());
-                }
+            let value: serde_json::Value = result
+                .into_value()
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
+
+            if value.get("gone").and_then(|v| v.as_bool()) == Some(true) {
+                return Ok(());
             }
 
             if start.elapsed() >= timeout {
