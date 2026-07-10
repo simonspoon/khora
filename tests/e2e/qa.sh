@@ -68,6 +68,18 @@ assert_ge() {
   fi
 }
 
+assert_process_gone() {
+  local label="$1" pid="$2"
+  if ! kill -0 "$pid" 2>/dev/null; then
+    printf "  ${GREEN}PASS${NC}  %s\n" "$label"
+    ((PASS++))
+  else
+    printf "  ${RED}FAIL${NC}  %s\n" "$label"
+    printf "       Chrome process %s is still running\n" "$pid"
+    ((FAIL++))
+  fi
+}
+
 cleanup() {
   if [[ -n "$SESSION" ]]; then
     "$KHORA" kill "$SESSION" >/dev/null 2>&1 || true
@@ -329,6 +341,7 @@ assert_contains "json text has content" "$OUTPUT" "Khora Test Page"
 OUTPUT=$("$KHORA" -f json status "$SESSION" 2>&1)
 assert_contains "json status has brace" "$OUTPUT" "{"
 assert_contains "json status has alive" "$OUTPUT" "alive"
+CHROME_PID=$(echo "$OUTPUT" | grep -oE '"pid": [0-9]+' | awk '{print $2}')
 
 OUTPUT=$("$KHORA" -f json find "$SESSION" "#greeting" 2>&1)
 assert_contains "json find has bracket" "$OUTPUT" "["
@@ -345,6 +358,11 @@ SESSION=""  # prevent double-kill in cleanup
 # Verify session is gone
 OUTPUT=$("$KHORA" status "$KILLED_SESSION" 2>&1 || true)
 assert_contains "session gone after kill" "$OUTPUT" "not found"
+
+# Verify the underlying Chrome process actually died, not just the session file
+if [[ -n "$CHROME_PID" && "$CHROME_PID" != "0" ]]; then
+  assert_process_gone "Chrome process $CHROME_PID exited after kill" "$CHROME_PID"
+fi
 
 # ── summary ──────────────────────────────────────────────
 

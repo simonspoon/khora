@@ -23,6 +23,7 @@ pub struct CdpClient {
     browser: Browser,
     _handler_handle: tokio::task::JoinHandle<()>,
     data_dir: Option<PathBuf>,
+    pid: u32,
 }
 
 impl CdpClient {
@@ -106,6 +107,7 @@ impl CdpClient {
             browser,
             _handler_handle: handler_handle,
             data_dir: Some(data_dir),
+            pid,
         };
 
         Ok((client, session))
@@ -137,6 +139,7 @@ impl CdpClient {
             browser,
             _handler_handle: handler_handle,
             data_dir: None,
+            pid: session.pid,
         })
     }
 
@@ -895,10 +898,17 @@ impl CdpClient {
     }
 
     /// Close the browser and clean up the Chrome user data directory.
-    pub async fn close(self) -> KhoraResult<()> {
+    /// Sends a graceful CDP `Browser.close`, then falls back to signaling the
+    /// OS process directly (SIGTERM/SIGKILL) since `drop`ping a `Browser`
+    /// obtained via `connect()` has no child handle to kill on its own.
+    pub async fn close(mut self) -> KhoraResult<()> {
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(500), self.browser.close()).await;
         drop(self.browser);
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         self._handler_handle.abort();
+        if !crate::session::kill_process(self.pid).await {
+            tracing::warn!(pid = self.pid, "failed to confirm Chrome process exited");
+        }
         if let Some(ref dir) = self.data_dir {
             cleanup_data_dir(dir);
         }

@@ -622,7 +622,10 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                         let _ = client.close().await;
                     }
                     Err(_) => {
-                        // Chrome already dead — clean up data dir manually
+                        // Connect failed — Chrome is already gone, or this PID has
+                        // since been recycled by an unrelated process. Either way we
+                        // have no verified handle to it, so don't signal the PID —
+                        // just clean up our own bookkeeping.
                         if let Some(ref dir) = info.data_dir {
                             khora_cdp::cleanup_data_dir(dir);
                         }
@@ -720,6 +723,8 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                             let _ = client.close().await;
                         }
                         Err(_) => {
+                            // Connect failed — no verified handle to this PID
+                            // (could be a recycled PID), so don't signal it.
                             if let Some(ref dir) = info.data_dir {
                                 khora_cdp::cleanup_data_dir(dir);
                             }
