@@ -181,6 +181,14 @@ assert_exit "type exits 0" "$EC" 0
 OUTPUT=$("$KHORA" eval "$SESSION" "document.getElementById('name-input').value" 2>&1)
 assert_contains "typed text persisted" "$OUTPUT" "khora-test"
 
+# React-controlled input: onChange must actually fire, not just DOM .value
+OUTPUT=$("$KHORA" type "$SESSION" "#react-input" "khora-react" 2>&1)
+EC=$?
+assert_exit "type into react-input exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#react-input-result" 2>&1)
+assert_contains "react onChange fired" "$OUTPUT" "onchange:1 value:khora-react"
+
 # ── click ────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ click${NC}\n"

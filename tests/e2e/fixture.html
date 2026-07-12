@@ -13,6 +13,14 @@
   <!-- type test -->
   <input id="name-input" type="text" placeholder="Enter name" />
 
+  <!-- type test: React-style controlled input value tracking. React shadows
+       the native value setter on the instance to detect real changes; a
+       plain `el.value = x` assignment updates its tracker too, so onChange
+       never fires. Only a set through the *native* prototype setter (typing
+       from a real user, or the native-setter trick) is detected. -->
+  <input id="react-input" type="text" placeholder="Enter name" />
+  <div id="react-input-result">onchange:0</div>
+
   <!-- click + console test -->
   <button id="counter-btn">Clicked 0</button>
 
@@ -119,6 +127,37 @@
         'capdrag:' + capStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
         ' capmoves:' + capMoves + ' captured:' + captured + ' trusted:' + e.isTrusted;
     });
+
+    // React-style value tracking: shadow the native setter on the instance,
+    // and only report a change when the underlying native value diverges
+    // from what the tracker last saw (i.e. the native setter was used
+    // directly, bypassing this instance's shadowed setter).
+    (function() {
+      var input = document.getElementById('react-input');
+      var descriptor = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+      var nativeGet = descriptor.get, nativeSet = descriptor.set;
+      var trackedValue = nativeGet.call(input);
+
+      Object.defineProperty(input, 'value', {
+        get: function() { return nativeGet.call(this); },
+        set: function(v) {
+          trackedValue = v;
+          nativeSet.call(this, v);
+        },
+        configurable: true
+      });
+
+      var onChangeCount = 0;
+      input.addEventListener('input', function() {
+        var current = nativeGet.call(input);
+        if (current !== trackedValue) {
+          trackedValue = current;
+          onChangeCount++;
+          document.getElementById('react-input-result').textContent =
+            'onchange:' + onChangeCount + ' value:' + current;
+        }
+      });
+    })();
 
     // Eval test value
     window.khoraTestValue = 42;

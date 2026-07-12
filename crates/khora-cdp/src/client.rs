@@ -336,8 +336,11 @@ impl CdpClient {
 
     /// Type text into an element matching a CSS selector.
     /// Uses JS-based focus + value assignment to avoid chromiumoxide element
-    /// methods hanging on reconnected sessions. Also dispatches input/change
-    /// events so frameworks (React, Vue, etc.) pick up the value.
+    /// methods hanging on reconnected sessions. Sets the value through the
+    /// element's native prototype setter (not the plain `el.value =`
+    /// assignment) so React's instance-level value tracker sees a real
+    /// change and fires onChange, then dispatches input/change events so
+    /// frameworks (React, Vue, etc.) pick up the value.
     pub async fn type_text(&self, selector: &str, text: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
@@ -351,7 +354,15 @@ impl CdpClient {
                 }}
                 if (!el) return {{ found: false }};
                 el.focus();
-                el.value = {text};
+                const proto = el.tagName === 'TEXTAREA'
+                    ? window.HTMLTextAreaElement.prototype
+                    : window.HTMLInputElement.prototype;
+                const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+                if (setter) {{
+                    setter.call(el, {text});
+                }} else {{
+                    el.value = {text};
+                }}
                 el.dispatchEvent(new Event('input', {{ bubbles: true }}));
                 el.dispatchEvent(new Event('change', {{ bubbles: true }}));
                 return {{ found: true }};
