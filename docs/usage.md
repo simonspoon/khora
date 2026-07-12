@@ -156,6 +156,21 @@ khora drag "$S" 50,200 250,200 --steps 25 --delay 30   # slower, finer drag
 (default 16 ms, one frame) is the pause between events so frameworks that
 batch on animation frames see the motion.
 
+For inspecting mid-gesture state — e.g. screenshotting a marquee halfway
+through a drag — `drag` isn't enough: it runs the whole press-move-release
+sequence in one call, so there's no way to pause it without backgrounding the
+process and racing a separate `screenshot` against it. `mouse-down`,
+`mouse-move`, and `mouse-up` expose the same trusted CDP mouse events as
+individual steps so a script can interleave a `screenshot` between them:
+
+```bash
+khora mouse-down "$S" 100,150
+khora mouse-move "$S" 200,275
+khora screenshot "$S" -o mid-drag.png    # inspect state with the button still down
+khora mouse-move "$S" 300,400
+khora mouse-up "$S" 300,400
+```
+
 ### Screenshot comparison
 
 ```bash

@@ -660,6 +660,34 @@ impl CdpClient {
         })
     }
 
+    /// Dispatch a single trusted mouse event (CDP Input.dispatchMouseEvent).
+    ///
+    /// Shared by [`Self::drag`] and the step-wise [`Self::mouse_down`] /
+    /// [`Self::mouse_move`] / [`Self::mouse_up`] primitives. `buttons` is set
+    /// to 1 (left button held) for every event type, matching the state a
+    /// real press-move-release gesture reports throughout.
+    async fn dispatch_mouse_event(
+        &self,
+        page: &Page,
+        kind: DispatchMouseEventType,
+        x: f64,
+        y: f64,
+    ) -> KhoraResult<()> {
+        let event = DispatchMouseEventParams::builder()
+            .r#type(kind)
+            .x(x)
+            .y(y)
+            .button(MouseButton::Left)
+            .buttons(1)
+            .click_count(1)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        page.execute(event)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
+    }
+
     /// Drag from one viewport point to another with trusted mouse events
     /// (CDP Input.dispatchMouseEvent: press, interpolated moves, release).
     ///
@@ -680,37 +708,51 @@ impl CdpClient {
         let page = self.get_or_create_page().await?;
         let delay = std::time::Duration::from_millis(delay_ms);
 
-        let event = |kind: DispatchMouseEventType, x: f64, y: f64| {
-            DispatchMouseEventParams::builder()
-                .r#type(kind)
-                .x(x)
-                .y(y)
-                .button(MouseButton::Left)
-                .buttons(1)
-                .click_count(1)
-                .build()
-                .map_err(KhoraError::Cdp)
-        };
-
-        page.execute(event(DispatchMouseEventType::MousePressed, from.0, from.1)?)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, from.0, from.1)
+            .await?;
 
         for i in 1..=steps {
             tokio::time::sleep(delay).await;
             let t = f64::from(i) / f64::from(steps);
             let x = from.0 + (to.0 - from.0) * t;
             let y = from.1 + (to.1 - from.1) * t;
-            page.execute(event(DispatchMouseEventType::MouseMoved, x, y)?)
-                .await
-                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, x, y)
+                .await?;
         }
 
         tokio::time::sleep(delay).await;
-        page.execute(event(DispatchMouseEventType::MouseReleased, to.0, to.1)?)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, to.0, to.1)
+            .await?;
         Ok(())
+    }
+
+    /// Press the left mouse button at a point with a trusted event, without
+    /// releasing it.
+    ///
+    /// Pairs with [`Self::mouse_move`] and [`Self::mouse_up`] to script a
+    /// drag as separate CLI invocations, so mid-gesture state (e.g. a
+    /// marquee mid-drag) can be inspected with an ordinary `screenshot` call
+    /// between steps instead of racing a backgrounded `drag`.
+    pub async fn mouse_down(&self, at: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1)
+            .await
+    }
+
+    /// Move the mouse to a point with a trusted event, carrying over
+    /// whatever button state a prior [`Self::mouse_down`] established.
+    pub async fn mouse_move(&self, at: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, at.0, at.1)
+            .await
+    }
+
+    /// Release the left mouse button at a point with a trusted event,
+    /// completing a gesture started with [`Self::mouse_down`].
+    pub async fn mouse_up(&self, at: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1)
+            .await
     }
 
     /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.

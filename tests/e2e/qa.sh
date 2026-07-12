@@ -222,6 +222,65 @@ assert_contains "capture drag held pointer capture" "$OUTPUT" "captured:true"
 assert_contains "capture drag moves seen under capture" "$OUTPUT" "capmoves:6"
 assert_contains "capture drag events are trusted" "$OUTPUT" "trusted:true"
 
+# ── mouse-down / mouse-move / mouse-up (step-wise drag) ─────
+
+printf "\n${BOLD}▸ mouse-down/move/up${NC}\n"
+# Same fixture as drag, but scripted as separate steps with a screenshot
+# in between — proves mid-gesture state can be inspected without racing.
+POINTS=$("$KHORA" eval "$SESSION" "var r=document.getElementById('drag-zone').getBoundingClientRect(); Math.round(r.x+10)+','+Math.round(r.y+10)+' '+Math.round(r.x+150)+','+Math.round(r.y+50)+' '+Math.round(r.x+250)+','+Math.round(r.y+80)" 2>&1)
+FROM=$(echo "$POINTS" | cut -d' ' -f1)
+MID=$(echo "$POINTS" | cut -d' ' -f2)
+TO=$(echo "$POINTS" | cut -d' ' -f3)
+
+OUTPUT=$("$KHORA" mouse-down "$SESSION" "$FROM" 2>&1)
+EC=$?
+assert_exit "mouse-down exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" mouse-move "$SESSION" "$MID" 2>&1)
+EC=$?
+assert_exit "mouse-move exits 0" "$EC" 0
+
+MIDSHOT="/tmp/khora-qa-mid-drag-$$.png"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$MIDSHOT" 2>&1)
+EC=$?
+assert_exit "screenshot mid-gesture exits 0" "$EC" 0
+assert_file "mid-gesture screenshot written" "$MIDSHOT"
+rm -f "$MIDSHOT"
+
+OUTPUT=$("$KHORA" mouse-up "$SESSION" "$TO" 2>&1)
+EC=$?
+assert_exit "mouse-up exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#drag-result" 2>&1)
+assert_contains "step-wise drag events are trusted" "$OUTPUT" "trusted:true"
+assert_contains "step-wise drag dispatched one move" "$OUTPUT" "moves:1"
+assert_contains "step-wise drag released at target" "$OUTPUT" "->$TO"
+
+# Same step-wise sequence against the pointer-capture-guarded splitter: each
+# mouse-down/mouse-move/mouse-up is its own CLI process and CDP connection,
+# so this proves the page (not the connection) holds pointer-capture state
+# across steps — the premise "mouse-move carries over button state" depends on it.
+POINTS=$("$KHORA" eval "$SESSION" "var r=document.getElementById('splitter').getBoundingClientRect(); Math.round(r.x+10)+','+Math.round(r.y+20)+' '+Math.round(r.x+250)+','+Math.round(r.y+20)" 2>&1)
+FROM="${POINTS% *}"
+TO="${POINTS#* }"
+
+OUTPUT=$("$KHORA" mouse-down "$SESSION" "$FROM" 2>&1)
+EC=$?
+assert_exit "step-wise mouse-down on splitter exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" mouse-move "$SESSION" "$TO" 2>&1)
+EC=$?
+assert_exit "step-wise mouse-move on splitter exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" mouse-up "$SESSION" "$TO" 2>&1)
+EC=$?
+assert_exit "step-wise mouse-up on splitter exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#splitter-result" 2>&1)
+assert_contains "step-wise drag held pointer capture across connections" "$OUTPUT" "captured:true"
+assert_contains "step-wise drag moves seen under capture" "$OUTPUT" "capmoves:1"
+assert_contains "step-wise splitter events are trusted" "$OUTPUT" "trusted:true"
+
 # ── console ──────────────────────────────────────────────
 
 printf "\n${BOLD}▸ console${NC}\n"

@@ -170,6 +170,37 @@ enum Command {
         delay: u64,
     },
 
+    /// Press the left mouse button at a point without releasing it
+    ///
+    /// Pairs with `mouse-move` and `mouse-up` to script a drag as separate
+    /// steps, so mid-gesture state can be screenshotted between them instead
+    /// of racing a backgrounded `drag`.
+    MouseDown {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
+    /// Move the mouse to a point, carrying over button state from `mouse-down`
+    MouseMove {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
+    /// Release the left mouse button at a point, completing a `mouse-down` gesture
+    MouseUp {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
     /// Capture a screenshot
     Screenshot {
         /// Session ID
@@ -482,6 +513,51 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     "to": { "x": to.x, "y": to.y },
                     "steps": steps,
                     "delay_ms": delay,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::MouseDown { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.mouse_down((at.x, at.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Mouse down: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "mouse-down",
+                    "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::MouseMove { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.mouse_move((at.x, at.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Mouse moved: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "mouse-move",
+                    "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::MouseUp { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.mouse_up((at.x, at.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Mouse up: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "mouse-up",
+                    "at": { "x": at.x, "y": at.y },
                 }))
                 .unwrap()),
             }

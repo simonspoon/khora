@@ -75,6 +75,9 @@ khora launch --window-size 1366x768
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |
 | `drag <session> <from> <to>` | Drag with trusted mouse events between `X,Y` points (`--steps`, `--delay` ms) |
+| `mouse-down <session> <at>` | Press the left mouse button at `X,Y` without releasing it |
+| `mouse-move <session> <at>` | Move the mouse to `X,Y`, carrying over button state |
+| `mouse-up <session> <at>` | Release the left mouse button at `X,Y` |
 | `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

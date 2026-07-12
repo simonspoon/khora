@@ -141,6 +141,69 @@ fn test_drag_rejects_zero_steps() {
 }
 
 #[test]
+fn test_mouse_down_help() {
+    khora()
+        .args(["mouse-down", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Press the left mouse button"));
+}
+
+#[test]
+fn test_mouse_down_nonexistent_session() {
+    khora()
+        .args(["mouse-down", "nonexistent_xyz", "0,0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_mouse_move_help() {
+    khora()
+        .args(["mouse-move", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Move the mouse"));
+}
+
+#[test]
+fn test_mouse_move_nonexistent_session() {
+    khora()
+        .args(["mouse-move", "nonexistent_xyz", "0,0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_mouse_up_help() {
+    khora()
+        .args(["mouse-up", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Release the left mouse button"));
+}
+
+#[test]
+fn test_mouse_up_nonexistent_session() {
+    khora()
+        .args(["mouse-up", "nonexistent_xyz", "0,0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_mouse_move_rejects_invalid_point() {
+    khora()
+        .args(["mouse-move", "nonexistent_xyz", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
 fn test_screenshot_help() {
     khora()
         .args(["screenshot", "--help"])
