@@ -43,6 +43,10 @@
   <div id="splitter" style="width: 300px; height: 40px; border: 1px solid #888;">Splitter</div>
   <div id="splitter-result"></div>
 
+  <!-- click-at/dblclick-at test: records trusted point clicks -->
+  <div id="point-target" style="width: 120px; height: 60px; border: 1px solid #888;">Point target</div>
+  <div id="point-click-result"></div>
+
   <!-- key test: records trusted key events with modifier state -->
   <div id="key-result"></div>
 
@@ -129,6 +133,24 @@
       document.getElementById('splitter-result').textContent =
         'capdrag:' + capStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
         ' capmoves:' + capMoves + ' captured:' + captured + ' trusted:' + e.isTrusted;
+    });
+
+    // click-at/dblclick-at test: record trusted click/dblclick at a point,
+    // including native click-count semantics (dblclick only fires when the
+    // second press/release pair carries clickCount 2).
+    var pointTarget = document.getElementById('point-target');
+    var pointClicks = 0, pointDblclicks = 0;
+    pointTarget.addEventListener('click', function(e) {
+      pointClicks++;
+      document.getElementById('point-click-result').textContent =
+        'click:' + pointClicks + ' at:' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
+        ' trusted:' + e.isTrusted;
+    });
+    pointTarget.addEventListener('dblclick', function(e) {
+      pointDblclicks++;
+      document.getElementById('point-click-result').textContent =
+        'dblclick:' + pointDblclicks + ' at:' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
+        ' trusted:' + e.isTrusted;
     });
 
     // Key test: record key/code, modifier flags, and trusted state.

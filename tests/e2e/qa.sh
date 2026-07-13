@@ -289,6 +289,29 @@ assert_contains "step-wise drag held pointer capture across connections" "$OUTPU
 assert_contains "step-wise drag moves seen under capture" "$OUTPUT" "capmoves:1"
 assert_contains "step-wise splitter events are trusted" "$OUTPUT" "trusted:true"
 
+# ── click-at / dblclick-at ───────────────────────────────
+
+printf "\n${BOLD}▸ click-at/dblclick-at${NC}\n"
+# Point-based clicks hit whatever is at the pixel, not a resolved selector —
+# resolve the target's center at runtime like the drag fixtures do.
+POINT=$("$KHORA" eval "$SESSION" "var r=document.getElementById('point-target').getBoundingClientRect(); Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height/2)" 2>&1)
+
+OUTPUT=$("$KHORA" click-at "$SESSION" "$POINT" 2>&1)
+EC=$?
+assert_exit "click-at exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#point-click-result" 2>&1)
+assert_contains "click-at registered a click" "$OUTPUT" "click:1"
+assert_contains "click-at event is trusted" "$OUTPUT" "trusted:true"
+
+OUTPUT=$("$KHORA" dblclick-at "$SESSION" "$POINT" 2>&1)
+EC=$?
+assert_exit "dblclick-at exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#point-click-result" 2>&1)
+assert_contains "dblclick-at registered a dblclick" "$OUTPUT" "dblclick:1"
+assert_contains "dblclick-at event is trusted" "$OUTPUT" "trusted:true"
+
 # ── key ──────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ key${NC}\n"

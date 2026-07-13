@@ -195,6 +195,62 @@ fn test_mouse_up_nonexistent_session() {
 }
 
 #[test]
+fn test_click_at_help() {
+    khora()
+        .args(["click-at", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Click at a raw viewport point"));
+}
+
+#[test]
+fn test_click_at_nonexistent_session() {
+    khora()
+        .args(["click-at", "nonexistent_xyz", "0,0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_click_at_rejects_invalid_point() {
+    khora()
+        .args(["click-at", "nonexistent_xyz", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
+fn test_dblclick_at_help() {
+    khora()
+        .args(["dblclick-at", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Double-click at a raw viewport point",
+        ));
+}
+
+#[test]
+fn test_dblclick_at_nonexistent_session() {
+    khora()
+        .args(["dblclick-at", "nonexistent_xyz", "0,0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_dblclick_at_rejects_invalid_point() {
+    khora()
+        .args(["dblclick-at", "nonexistent_xyz", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
 fn test_key_help() {
     khora()
         .args(["key", "--help"])

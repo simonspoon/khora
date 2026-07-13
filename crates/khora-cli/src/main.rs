@@ -201,6 +201,29 @@ enum Command {
         at: Point,
     },
 
+    /// Click at a raw viewport point with a trusted mouse event
+    ///
+    /// Unlike `click`, which resolves a CSS selector, this hits whatever is
+    /// actually at the point — for pixel-precise hit-target verification
+    /// (overlapping elements, canvas-drawn UI, z-order) a selector can't
+    /// express.
+    ClickAt {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
+    /// Double-click at a raw viewport point with trusted mouse events
+    DblclickAt {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
     /// Press a key combo with a trusted key event (CDP Input.dispatchKeyEvent)
     ///
     /// For modifier shortcuts (Cmd+D, Cmd+S, Ctrl+Shift+I, ...) that
@@ -572,6 +595,36 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 OutputFormat::Text => Ok(format!("Mouse up: {at}")),
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "mouse-up",
+                    "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::ClickAt { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.click_at((at.x, at.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Clicked at: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "click-at",
+                    "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::DblclickAt { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.dblclick_at((at.x, at.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Double-clicked at: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "dblclick-at",
                     "at": { "x": at.x, "y": at.y },
                 }))
                 .unwrap()),

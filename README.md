@@ -78,6 +78,8 @@ khora launch --window-size 1366x768
 | `mouse-down <session> <at>` | Press the left mouse button at `X,Y` without releasing it |
 | `mouse-move <session> <at>` | Move the mouse to `X,Y`, carrying over button state |
 | `mouse-up <session> <at>` | Release the left mouse button at `X,Y` |
+| `click-at <session> <at>` | Click whatever is at raw viewport point `X,Y` with a trusted mouse event |
+| `dblclick-at <session> <at>` | Double-click at raw viewport point `X,Y` with trusted mouse events |
 | `key <session> <combo>` | Press a trusted key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape` |
 | `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
 | `text <session> <selector>` | Get text content of matching elements |

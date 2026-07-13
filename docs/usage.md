@@ -171,6 +171,23 @@ khora mouse-move "$S" 300,400
 khora mouse-up "$S" 300,400
 ```
 
+### Point clicks
+
+`click` resolves a CSS selector; `click-at`/`dblclick-at` instead hit
+whatever is actually at a raw viewport point, using the same trusted mouse
+events as `drag`. Use them for pixel-precise hit-target verification a
+selector can't express — overlapping elements, canvas-drawn UI, confirming
+the topmost element at a point is the one that receives the click.
+
+```bash
+khora click-at "$S" 150,220
+khora dblclick-at "$S" 150,220
+```
+
+`dblclick-at` fires two press/release pairs at the point, the second pair
+carrying `clickCount: 2` — the signal Chromium needs to dispatch `dblclick`
+instead of two independent `click` events.
+
 ### Key shortcuts
 
 `key` dispatches a trusted native key event to the page (CDP

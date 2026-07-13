@@ -674,16 +674,21 @@ impl CdpClient {
 
     /// Dispatch a single trusted mouse event (CDP Input.dispatchMouseEvent).
     ///
-    /// Shared by [`Self::drag`] and the step-wise [`Self::mouse_down`] /
-    /// [`Self::mouse_move`] / [`Self::mouse_up`] primitives. `buttons` is set
-    /// to 1 (left button held) for every event type, matching the state a
-    /// real press-move-release gesture reports throughout.
+    /// Shared by [`Self::drag`], the step-wise [`Self::mouse_down`] /
+    /// [`Self::mouse_move`] / [`Self::mouse_up`] primitives, and
+    /// [`Self::click_at`] / [`Self::dblclick_at`]. `buttons` is set to 1
+    /// (left button held) for every event type, matching the state a real
+    /// press-move-release gesture reports throughout. `click_count` tells
+    /// Chromium which click in a sequence this is — 2 on the second
+    /// press/release pair is what makes it register as a double-click
+    /// rather than two separate clicks.
     async fn dispatch_mouse_event(
         &self,
         page: &Page,
         kind: DispatchMouseEventType,
         x: f64,
         y: f64,
+        click_count: i64,
     ) -> KhoraResult<()> {
         let event = DispatchMouseEventParams::builder()
             .r#type(kind)
@@ -691,7 +696,7 @@ impl CdpClient {
             .y(y)
             .button(MouseButton::Left)
             .buttons(1)
-            .click_count(1)
+            .click_count(click_count)
             .build()
             .map_err(KhoraError::Cdp)?;
         page.execute(event)
@@ -720,20 +725,26 @@ impl CdpClient {
         let page = self.get_or_create_page().await?;
         let delay = std::time::Duration::from_millis(delay_ms);
 
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, from.0, from.1)
-            .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MousePressed,
+            from.0,
+            from.1,
+            1,
+        )
+        .await?;
 
         for i in 1..=steps {
             tokio::time::sleep(delay).await;
             let t = f64::from(i) / f64::from(steps);
             let x = from.0 + (to.0 - from.0) * t;
             let y = from.1 + (to.1 - from.1) * t;
-            self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, x, y)
+            self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, x, y, 1)
                 .await?;
         }
 
         tokio::time::sleep(delay).await;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, to.0, to.1)
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, to.0, to.1, 1)
             .await?;
         Ok(())
     }
@@ -747,7 +758,7 @@ impl CdpClient {
     /// between steps instead of racing a backgrounded `drag`.
     pub async fn mouse_down(&self, at: (f64, f64)) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1)
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
             .await
     }
 
@@ -755,7 +766,7 @@ impl CdpClient {
     /// whatever button state a prior [`Self::mouse_down`] established.
     pub async fn mouse_move(&self, at: (f64, f64)) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, at.0, at.1)
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, at.0, at.1, 1)
             .await
     }
 
@@ -763,7 +774,38 @@ impl CdpClient {
     /// completing a gesture started with [`Self::mouse_down`].
     pub async fn mouse_up(&self, at: (f64, f64)) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1)
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
+            .await
+    }
+
+    /// Click at a raw viewport point with trusted mouse events (CDP
+    /// Input.dispatchMouseEvent: press then release, both `clickCount: 1`).
+    ///
+    /// Unlike [`Self::click`], which resolves a CSS selector and clicks that
+    /// element, this hits whatever is actually at `(x, y)` — needed to
+    /// verify pixel-precise hit targets (overlapping elements, canvas-drawn
+    /// UI, z-order) that a selector can't express.
+    pub async fn click_at(&self, at: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
+            .await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
+            .await
+    }
+
+    /// Double-click at a raw viewport point with trusted mouse events: two
+    /// press/release pairs at the same point, the second pair carrying
+    /// `clickCount: 2` — the signal Chromium uses to fire `dblclick` instead
+    /// of two separate `click` events.
+    pub async fn dblclick_at(&self, at: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
+            .await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
+            .await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 2)
+            .await?;
+        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 2)
             .await
     }
 
