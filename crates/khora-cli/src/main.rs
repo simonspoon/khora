@@ -201,6 +201,21 @@ enum Command {
         at: Point,
     },
 
+    /// Press a key combo with a trusted key event (CDP Input.dispatchKeyEvent)
+    ///
+    /// For modifier shortcuts (Cmd+D, Cmd+S, Ctrl+Shift+I, ...) that
+    /// page-level KeyboardEvent dispatch can't simulate as trusted. Combo is
+    /// `+`-separated; the last segment is the key (a single letter/digit, or
+    /// a named key like Enter/Escape/Tab/Backspace/Delete/Space/ArrowUp),
+    /// everything before it a modifier (Cmd/Meta/Command, Ctrl/Control,
+    /// Alt/Option, Shift).
+    Key {
+        /// Session ID
+        session: String,
+        /// Key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape`
+        combo: String,
+    },
+
     /// Capture a screenshot
     Screenshot {
         /// Session ID
@@ -558,6 +573,21 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "mouse-up",
                     "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Key { session, combo } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.key_press(combo).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Pressed: {combo}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "key",
+                    "combo": combo,
                 }))
                 .unwrap()),
             }

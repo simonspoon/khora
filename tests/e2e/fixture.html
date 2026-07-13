@@ -43,6 +43,9 @@
   <div id="splitter" style="width: 300px; height: 40px; border: 1px solid #888;">Splitter</div>
   <div id="splitter-result"></div>
 
+  <!-- key test: records trusted key events with modifier state -->
+  <div id="key-result"></div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -126,6 +129,16 @@
       document.getElementById('splitter-result').textContent =
         'capdrag:' + capStart + '->' + Math.round(e.clientX) + ',' + Math.round(e.clientY) +
         ' capmoves:' + capMoves + ' captured:' + captured + ' trusted:' + e.isTrusted;
+    });
+
+    // Key test: record key/code, modifier flags, and trusted state.
+    // Listens document-wide, like a real page-level keyboard shortcut.
+    document.addEventListener('keydown', function(e) {
+      document.getElementById('key-result').textContent =
+        'key:' + e.key + ' code:' + e.code +
+        ' meta:' + e.metaKey + ' ctrl:' + e.ctrlKey +
+        ' shift:' + e.shiftKey + ' alt:' + e.altKey +
+        ' trusted:' + e.isTrusted;
     });
 
     // React-style value tracking: shadow the native setter on the instance,

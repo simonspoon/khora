@@ -24,6 +24,9 @@ pub enum KhoraError {
     #[error("JavaScript error: {0}")]
     JavaScriptError(String),
 
+    #[error("invalid key combo: {0}")]
+    InvalidKeyCombo(String),
+
     #[error("Chrome not found — install Chrome or set CHROME_PATH")]
     ChromeNotFound,
 
@@ -86,6 +89,7 @@ mod tests {
         assert_eq!(KhoraError::ScreenshotFailed("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::JavaScriptError("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::Cdp("x".into()).exit_code(), 1);
+        assert_eq!(KhoraError::InvalidKeyCombo("x".into()).exit_code(), 1);
     }
 
     #[test]

@@ -171,6 +171,28 @@ khora mouse-move "$S" 300,400
 khora mouse-up "$S" 300,400
 ```
 
+### Key shortcuts
+
+`key` dispatches a trusted native key event to the page (CDP
+`Input.dispatchKeyEvent`: rawKeyDown then keyUp, modifier bits set on both).
+Use it for a page's own modifier-key shortcuts — `e.metaKey`/`e.ctrlKey`
+listeners a web app defines itself — that page-level `KeyboardEvent` dispatch
+can't simulate as trusted. This targets the page's event handlers, not
+Chrome's own accelerators (bookmark dialog, devtools) — those live in the
+browser process, outside what `Input.dispatchKeyEvent` reaches.
+
+The combo is `+`-separated; the last segment is the key (a single
+letter/digit, or a named key: `Enter`, `Escape`, `Tab`, `Backspace`,
+`Delete`, `Space`, `ArrowUp`/`Down`/`Left`/`Right`, `Home`, `End`,
+`PageUp`/`PageDown`), everything before it a modifier (`Cmd`/`Meta`/`Command`,
+`Ctrl`/`Control`, `Alt`/`Option`, `Shift`).
+
+```bash
+khora key "$S" "Cmd+S"           # app's own save handler (page calls preventDefault)
+khora key "$S" "Cmd+Shift+D"     # app-defined shortcut
+khora key "$S" "Escape"          # no modifier — just the key, e.g. dismiss a modal
+```
+
 ### Screenshot comparison
 
 ```bash

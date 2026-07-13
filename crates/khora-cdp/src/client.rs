@@ -1,7 +1,8 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
 use chromiumoxide::cdp::browser_protocol::input::{
-    DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
+    DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
+    MouseButton,
 };
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
@@ -764,6 +765,133 @@ impl CdpClient {
         let page = self.get_or_create_page().await?;
         self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1)
             .await
+    }
+
+    /// Press a `+`-separated key combo (e.g. `Cmd+D`, `Ctrl+Shift+I`,
+    /// `Escape`) with a trusted key event (CDP Input.dispatchKeyEvent:
+    /// rawKeyDown then keyUp, modifier bits set on both).
+    ///
+    /// Unlike the JS-evaluation element ops, this must use native CDP input:
+    /// modifier shortcuts are handled by the browser/OS or by listeners
+    /// checking `isTrusted`, which synthetic `KeyboardEvent` dispatch can't
+    /// satisfy.
+    pub async fn key_press(&self, combo: &str) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let (modifiers, key_name) = Self::parse_key_combo(combo)?;
+        let (key, code, vk) = Self::key_info(key_name).ok_or_else(|| {
+            KhoraError::InvalidKeyCombo(format!("unsupported key {key_name:?} in {combo:?}"))
+        })?;
+        // key_info normalizes single letters to lowercase; only Shift should
+        // report the uppercase `key` a real keyboard would produce (`code`
+        // and the virtual-key code stay the same either way — physical key
+        // identity, not the character it produces).
+        let shifted = modifiers & 8 != 0;
+        let key = if shifted && key.len() == 1 && key.starts_with(|c: char| c.is_ascii_alphabetic())
+        {
+            key.to_ascii_uppercase()
+        } else {
+            key
+        };
+
+        let builder = DispatchKeyEventParams::builder()
+            .modifiers(modifiers)
+            .code(code)
+            .key(key)
+            .windows_virtual_key_code(vk)
+            .native_virtual_key_code(vk);
+
+        let down = builder
+            .clone()
+            .r#type(DispatchKeyEventType::RawKeyDown)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        page.execute(down)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let up = builder
+            .r#type(DispatchKeyEventType::KeyUp)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        page.execute(up)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Split a key combo into a CDP modifier bitfield (Alt=1, Ctrl=2,
+    /// Meta=4, Shift=8) and the trailing key name, e.g. `"Cmd+D"` ->
+    /// `(4, "D")`.
+    fn parse_key_combo(combo: &str) -> KhoraResult<(i64, &str)> {
+        let parts: Vec<&str> = combo
+            .split('+')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let (key_name, mod_names) = parts
+            .split_last()
+            .ok_or_else(|| KhoraError::InvalidKeyCombo(format!("empty combo: {combo:?}")))?;
+
+        let mut modifiers = 0i64;
+        for name in mod_names {
+            let bit = match name.to_ascii_lowercase().as_str() {
+                "alt" | "option" => 1,
+                "ctrl" | "control" => 2,
+                "cmd" | "command" | "meta" => 4,
+                "shift" => 8,
+                other => {
+                    return Err(KhoraError::InvalidKeyCombo(format!(
+                        "unknown modifier {other:?} in {combo:?}"
+                    )))
+                }
+            };
+            modifiers |= bit;
+        }
+        Ok((modifiers, key_name))
+    }
+
+    /// Look up the CDP `key`, `code`, and Windows virtual-key-code for a key
+    /// name: single letters/digits, or a common named key (Enter, Escape,
+    /// Tab, Backspace, Delete, Space, arrow keys).
+    fn key_info(name: &str) -> Option<(String, String, i64)> {
+        let mut chars = name.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            if c.is_ascii_alphabetic() {
+                let upper = c.to_ascii_uppercase();
+                // Unshifted `key` is lowercase regardless of the case typed in
+                // the combo; key_press uppercases it back when Shift is set.
+                return Some((
+                    c.to_ascii_lowercase().to_string(),
+                    format!("Key{upper}"),
+                    i64::from(upper as u8),
+                ));
+            }
+            if c.is_ascii_digit() {
+                return Some((
+                    c.to_string(),
+                    format!("Digit{c}"),
+                    i64::from(c as u8), // '0'..='9' == 0x30..=0x39, matching VK_0..VK_9
+                ));
+            }
+        }
+        let (key, code, vk) = match name.to_ascii_lowercase().as_str() {
+            "enter" | "return" => ("Enter", "Enter", 13),
+            "escape" | "esc" => ("Escape", "Escape", 27),
+            "tab" => ("Tab", "Tab", 9),
+            "backspace" => ("Backspace", "Backspace", 8),
+            "delete" | "del" => ("Delete", "Delete", 46),
+            "space" => (" ", "Space", 32),
+            "home" => ("Home", "Home", 36),
+            "end" => ("End", "End", 35),
+            "pageup" => ("PageUp", "PageUp", 33),
+            "pagedown" => ("PageDown", "PageDown", 34),
+            "arrowup" | "up" => ("ArrowUp", "ArrowUp", 38),
+            "arrowdown" | "down" => ("ArrowDown", "ArrowDown", 40),
+            "arrowleft" | "left" => ("ArrowLeft", "ArrowLeft", 37),
+            "arrowright" | "right" => ("ArrowRight", "ArrowRight", 39),
+            _ => return None,
+        };
+        Some((key.to_string(), code.to_string(), vk))
     }
 
     /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.

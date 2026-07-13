@@ -195,6 +195,24 @@ fn test_mouse_up_nonexistent_session() {
 }
 
 #[test]
+fn test_key_help() {
+    khora()
+        .args(["key", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted key event"));
+}
+
+#[test]
+fn test_key_nonexistent_session() {
+    khora()
+        .args(["key", "nonexistent_xyz", "Cmd+D"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_mouse_move_rejects_invalid_point() {
     khora()
         .args(["mouse-move", "nonexistent_xyz", "abc"])

@@ -289,6 +289,40 @@ assert_contains "step-wise drag held pointer capture across connections" "$OUTPU
 assert_contains "step-wise drag moves seen under capture" "$OUTPUT" "capmoves:1"
 assert_contains "step-wise splitter events are trusted" "$OUTPUT" "trusted:true"
 
+# ── key ──────────────────────────────────────────────────
+
+printf "\n${BOLD}▸ key${NC}\n"
+OUTPUT=$("$KHORA" key "$SESSION" "Cmd+D" 2>&1)
+EC=$?
+assert_exit "key Cmd+D exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#key-result" 2>&1)
+# Real Cmd+D (no Shift) reports lowercase e.key, matching what a page's own
+# `if (e.metaKey && e.key === 'd')` shortcut handler checks for.
+assert_contains "key reports lowercase key without shift" "$OUTPUT" "key:d"
+assert_contains "key reports code" "$OUTPUT" "code:KeyD"
+assert_contains "key reports meta modifier" "$OUTPUT" "meta:true"
+assert_contains "key event is trusted" "$OUTPUT" "trusted:true"
+
+# Discriminating case: Shift flips e.key to uppercase while code/vk (physical
+# key identity) stay the same — proves the combo isn't just echoing input case.
+OUTPUT=$("$KHORA" key "$SESSION" "Cmd+Shift+D" 2>&1)
+EC=$?
+assert_exit "key Cmd+Shift+D exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#key-result" 2>&1)
+assert_contains "key reports uppercase key with shift" "$OUTPUT" "key:D"
+assert_contains "key reports shift modifier" "$OUTPUT" "shift:true"
+assert_contains "key still reports meta modifier" "$OUTPUT" "meta:true"
+
+OUTPUT=$("$KHORA" key "$SESSION" "Escape" 2>&1)
+EC=$?
+assert_exit "key Escape exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#key-result" 2>&1)
+assert_contains "key with no modifier reports key" "$OUTPUT" "key:Escape"
+assert_contains "key with no modifier has no meta" "$OUTPUT" "meta:false"
+
 # ── console ──────────────────────────────────────────────
 
 printf "\n${BOLD}▸ console${NC}\n"
