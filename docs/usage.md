@@ -81,8 +81,9 @@ SESSION1=$(khora --format json launch | jq -r .id)
 SESSION2=$(khora --format json launch | jq -r .id)
 khora navigate "$SESSION1" "https://app1.com"
 khora navigate "$SESSION2" "https://app2.com"
-khora status        # lists all sessions
-khora kill --all    # kill every active session at once
+khora status "$SESSION1"   # check a single session (alive/dead)
+khora status               # lists all sessions
+khora kill --all           # kill every active session at once
 ```
 
 Each session uses its own Chrome user data directory (a unique temp dir), so concurrent sessions can't corrupt each other's profile.
@@ -269,6 +270,16 @@ Captures `fetch()` and `XMLHttpRequest` calls made by page JavaScript. Useful fo
 ```bash
 khora eval "$S" "JSON.stringify(performance.getEntriesByType('resource').map(e => ({url: e.name, type: e.initiatorType})))"
 ```
+
+### Console messages
+
+```bash
+khora console "$S"
+# [error] Uncaught TypeError: cannot read property 'foo' of undefined
+# [log] user clicked submit
+```
+
+Captures `console.log/warn/error/info` calls via a page-installed shim, buffered from page load. Useful for catching JS errors a UI test wouldn't otherwise surface.
 
 ### Wait patterns
 

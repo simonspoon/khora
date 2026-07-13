@@ -51,8 +51,11 @@ Uses [chromiumoxide](https://crates.io/crates/chromiumoxide) (v0.9) for Chrome D
 
 - **Launch**: `Browser::launch()` with platform-specific Chrome path
 - **Reconnect**: `Browser::connect()` + `fetch_targets()` to discover existing pages
-- **Navigate**: `page.goto(url)` (CDP `Page.navigate`) with a 10 s timeout; falls back to JS `window.location.href` + readyState polling when lifecycle events don't fire (common on reconnected sessions)
-- **Element operations**: JavaScript evaluation via `page.evaluate()` for rich element info
+- **Navigate**: `page.goto(url)` (CDP `Page.navigate`) with a 10 s timeout; falls back to JS `window.location.href` + readyState polling when lifecycle events don't fire (common on reconnected sessions). `--no-cache` sends `Network.setCacheDisabled` first.
+- **Element operations**: JavaScript evaluation via `page.evaluate()` for rich element info (`find`, `click`, `type`, `text`, `attribute`). `type` sets the value through the native React-tracked property setter so framework `onChange` handlers fire, then dispatches a synthetic `input` event.
+- **Trusted input events**: `drag`, `mouse-down`, `mouse-move`, `mouse-up`, `click-at`, `dblclick-at`, and `key` bypass JS evaluation entirely and dispatch native, OS-trusted CDP input events (`Input.dispatchMouseEvent`, `Input.dispatchKeyEvent`) directly at viewport coordinates or as raw key codes. This is required for handlers gated on `event.isTrusted` or `setPointerCapture`, which synthetic JS/DOM events cannot satisfy. `mouse-down`/`mouse-move`/`mouse-up` are separate CLI invocations that share no in-process state — persistence across the sequence works because Chrome's own input state (e.g. pointer capture) lives in the browser, not in khora.
+- **Viewport**: `set-viewport` uses `Emulation.setDeviceMetricsOverride` to set arbitrary widths/heights (including phone widths headless Chrome rejects via `--window-size`), with `--mobile` toggling mobile emulation.
+- **Screenshot**: `Page.captureScreenshot`; `--selector` first resolves the element's bounding box via `page.evaluate()`, then crops to it.
 - **Page selection**: Prefers non-blank pages by CDP target URL, then falls back to JS `location.href` evaluation (handles stale target URLs after JS-based navigation)
 
 ## Error handling
