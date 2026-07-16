@@ -884,7 +884,41 @@ impl CdpClient {
         page.execute(up)
             .await
             .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        self.force_compositor_frame(&page).await;
         Ok(())
+    }
+
+    /// Nudge Chromium into producing a fresh compositor frame, discarding
+    /// the result.
+    ///
+    /// A trusted `Input.dispatchKeyEvent` leaves the renderer without a
+    /// pending frame: the next `mouseMoved` dispatch pays a ~5s hit-test
+    /// tax and the next `mouseWheel` dispatch never acks at all (hangs the
+    /// full 30s chromiumoxide request timeout) until *something* forces a
+    /// frame to be produced. A 1x1 screenshot is the cheapest CDP call
+    /// observed to force that frame (a real `captureScreenshot` inherently
+    /// waits on one) — verified live: it also fixes the mouse-move
+    /// degradation, confirming both symptoms share this one root cause.
+    /// Best-effort: swallow failures rather than fail the key press over a
+    /// side-effect nudge, and cap the wait so a wedged nudge can't turn a
+    /// fast key press into a slow one.
+    async fn force_compositor_frame(&self, page: &Page) {
+        let params = ScreenshotParams::builder()
+            .format(CaptureScreenshotFormat::Png)
+            .clip(Viewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+                scale: 1.0,
+            })
+            .build();
+        if let Err(e) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), page.screenshot(params)).await
+        {
+            tracing::debug!("force_compositor_frame timed out: {e}");
+        }
     }
 
     /// Split a key combo into a CDP modifier bitfield (Alt=1, Ctrl=2,

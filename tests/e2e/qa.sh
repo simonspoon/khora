@@ -313,15 +313,6 @@ assert_contains "dblclick-at registered a dblclick" "$OUTPUT" "dblclick:1"
 assert_contains "dblclick-at event is trusted" "$OUTPUT" "trusted:true"
 
 # ── wheel ────────────────────────────────────────────────
-#
-# Runs before the `key` section deliberately: any `key` press that reaches
-# the renderer (anything but a Cmd/Meta-modified combo, which Chrome
-# intercepts as a browser accelerator before the page sees it) leaves
-# headless Chrome in a state where the next `wheel` call never acks and
-# hangs for chromiumoxide's full 30s internal request timeout (see mesa
-# task 384; drag/mouse-move degrade but still complete, only wheel hangs
-# outright). click-at/dblclick-at are unaffected. Ordering around it here
-# keeps this section green without masking the finding.
 
 printf "\n${BOLD}▸ wheel${NC}\n"
 POINT=$("$KHORA" eval "$SESSION" "var r=document.getElementById('scroll-inner').getBoundingClientRect(); Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height/2)" 2>&1)
@@ -376,6 +367,24 @@ assert_exit "key Escape exits 0" "$EC" 0
 OUTPUT=$("$KHORA" text "$SESSION" "#key-result" 2>&1)
 assert_contains "key with no modifier reports key" "$OUTPUT" "key:Escape"
 assert_contains "key with no modifier has no meta" "$OUTPUT" "meta:false"
+
+# Regression for mesa task 384: a key press that reaches the renderer used
+# to leave headless Chrome in a state where the next `wheel` call never
+# acked, hanging for chromiumoxide's full 30s internal request timeout.
+# key_press() now forces a compositor frame after dispatch, so this must
+# stay fast (well under the 30s hang) rather than just eventually exit 0.
+START=$(date +%s)
+OUTPUT=$("$KHORA" wheel "$SESSION" "$POINT" "0,10" 2>&1)
+EC=$?
+ELAPSED=$(($(date +%s) - START))
+assert_exit "wheel after key exits 0" "$EC" 0
+if [ "$ELAPSED" -lt 10 ]; then
+  printf "  ${GREEN}PASS${NC}  wheel after key stayed fast (${ELAPSED}s)\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  wheel after key took ${ELAPSED}s (expected <10s, was hanging 30s pre-fix)\n"
+  ((FAIL++))
+fi
 
 # ── console ──────────────────────────────────────────────
 
