@@ -312,6 +312,37 @@ OUTPUT=$("$KHORA" text "$SESSION" "#point-click-result" 2>&1)
 assert_contains "dblclick-at registered a dblclick" "$OUTPUT" "dblclick:1"
 assert_contains "dblclick-at event is trusted" "$OUTPUT" "trusted:true"
 
+# ── wheel ────────────────────────────────────────────────
+#
+# Runs before the `key` section deliberately: any `key` press that reaches
+# the renderer (anything but a Cmd/Meta-modified combo, which Chrome
+# intercepts as a browser accelerator before the page sees it) leaves
+# headless Chrome in a state where the next `wheel` call never acks and
+# hangs for chromiumoxide's full 30s internal request timeout (see mesa
+# task 384; drag/mouse-move degrade but still complete, only wheel hangs
+# outright). click-at/dblclick-at are unaffected. Ordering around it here
+# keeps this section green without masking the finding.
+
+printf "\n${BOLD}▸ wheel${NC}\n"
+POINT=$("$KHORA" eval "$SESSION" "var r=document.getElementById('scroll-inner').getBoundingClientRect(); Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height/2)" 2>&1)
+
+OUTPUT=$("$KHORA" wheel "$SESSION" "$POINT" "0,1000" 2>&1)
+EC=$?
+assert_exit "wheel exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#wheel-result" 2>&1)
+assert_contains "wheel event is trusted" "$OUTPUT" "trusted:true"
+
+INNER_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('scroll-inner').scrollTop" 2>&1)
+assert_ge "wheel drove real native scroll" "$INNER_SCROLL" 1
+
+# overscroll-behavior:contain on the inner container means the remaining
+# delta (1000px requested, only ~540px scrollable) doesn't chain to the
+# outer container once inner hits its scroll bound — same topology as the
+# task-382 sidebar bug this command was built to verify.
+OUTER_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('scroll-outer').scrollTop" 2>&1)
+assert_contains "wheel scroll did not chain past contain boundary" "$OUTER_SCROLL" "0"
+
 # ── key ──────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ key${NC}\n"

@@ -809,6 +809,32 @@ impl CdpClient {
             .await
     }
 
+    /// Scroll with a trusted native wheel event at a viewport point (CDP
+    /// Input.dispatchMouseEvent: type `mouseWheel`, with `deltaX`/`deltaY`).
+    ///
+    /// Unlike the JS-evaluation element ops, this must use native CDP input:
+    /// a synthetic `WheelEvent` dispatched from JS never reaches Chromium's
+    /// scroll pipeline, so it can't drive native scrolling, scroll chaining,
+    /// or `overscroll-behavior` — it only fires listeners, leaving
+    /// `scrollTop` untouched. This dispatches the real event Chromium's
+    /// compositor scrolls in response to, at whatever element sits under
+    /// `at`.
+    pub async fn wheel(&self, at: (f64, f64), delta: (f64, f64)) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let event = DispatchMouseEventParams::builder()
+            .r#type(DispatchMouseEventType::MouseWheel)
+            .x(at.0)
+            .y(at.1)
+            .delta_x(delta.0)
+            .delta_y(delta.1)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        page.execute(event)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
+    }
+
     /// Press a `+`-separated key combo (e.g. `Cmd+D`, `Ctrl+Shift+I`,
     /// `Escape`) with a trusted key event (CDP Input.dispatchKeyEvent:
     /// rawKeyDown then keyUp, modifier bits set on both).

@@ -211,6 +211,20 @@ khora key "$S" "Cmd+Shift+D"     # app-defined shortcut
 khora key "$S" "Escape"          # no modifier — just the key, e.g. dismiss a modal
 ```
 
+### Scrolling
+
+`wheel` dispatches a trusted native wheel event (CDP `Input.dispatchMouseEvent`,
+type `mouseWheel`). Use it instead of `eval`-based scrolling (e.g.
+`element.scrollTop = ...` or a synthetic `WheelEvent`) to verify scroll
+chaining and `overscroll-behavior` — a synthetic `WheelEvent` never reaches
+Chromium's scroll pipeline, so it fires listeners but never actually scrolls
+or chains between containers.
+
+```bash
+khora wheel "$S" 100,150 0,300     # scroll down 300px at 100,150
+khora wheel "$S" 100,150 0,-150    # scroll up
+```
+
 ### Screenshot comparison
 
 ```bash

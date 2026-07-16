@@ -81,6 +81,7 @@ khora launch --window-size 1366x768
 | `click-at <session> <at>` | Click whatever is at raw viewport point `X,Y` with a trusted mouse event |
 | `dblclick-at <session> <at>` | Double-click at raw viewport point `X,Y` with trusted mouse events |
 | `key <session> <combo>` | Press a trusted key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape` |
+| `wheel <session> <at> <delta>` | Scroll with a trusted native wheel event at `X,Y` by `dX,dY` CSS pixels |
 | `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

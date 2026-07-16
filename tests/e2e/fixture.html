@@ -50,6 +50,17 @@
   <!-- key test: records trusted key events with modifier state -->
   <div id="key-result"></div>
 
+  <!-- wheel test: native scroll + scroll-chaining (overscroll-behavior:contain).
+       scrollTop itself is read directly via `eval` — real scrolling needs no
+       JS listener to occur, only a native-trusted wheel event to drive it. -->
+  <div id="scroll-outer" style="width: 200px; height: 150px; overflow-y: auto;">
+    <div id="scroll-inner" style="width: 100%; height: 60px; overflow-y: auto; overscroll-behavior: contain;">
+      <div style="height: 600px;">Inner scroll content</div>
+    </div>
+    <div style="height: 600px;">Outer scroll content below inner</div>
+  </div>
+  <div id="wheel-result"></div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -161,6 +172,12 @@
         ' meta:' + e.metaKey + ' ctrl:' + e.ctrlKey +
         ' shift:' + e.shiftKey + ' alt:' + e.altKey +
         ' trusted:' + e.isTrusted;
+    });
+
+    // Wheel test: record trusted state of the native wheel event dispatched
+    // at the inner scroll container.
+    document.getElementById('scroll-inner').addEventListener('wheel', function(e) {
+      document.getElementById('wheel-result').textContent = 'wheel trusted:' + e.isTrusted;
     });
 
     // React-style value tracking: shadow the native setter on the instance,

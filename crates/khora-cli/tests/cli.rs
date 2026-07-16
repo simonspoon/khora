@@ -251,6 +251,42 @@ fn test_dblclick_at_rejects_invalid_point() {
 }
 
 #[test]
+fn test_wheel_help() {
+    khora()
+        .args(["wheel", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted native wheel event"));
+}
+
+#[test]
+fn test_wheel_nonexistent_session() {
+    khora()
+        .args(["wheel", "nonexistent_xyz", "0,0", "0,300"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_wheel_rejects_invalid_point() {
+    khora()
+        .args(["wheel", "nonexistent_xyz", "abc", "0,300"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
+fn test_wheel_rejects_invalid_delta() {
+    khora()
+        .args(["wheel", "nonexistent_xyz", "0,0", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
 fn test_key_help() {
     khora()
         .args(["key", "--help"])

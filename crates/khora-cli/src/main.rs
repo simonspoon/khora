@@ -224,6 +224,22 @@ enum Command {
         at: Point,
     },
 
+    /// Scroll with a trusted native wheel event (CDP Input.dispatchMouseEvent)
+    ///
+    /// Unlike `eval`-based scrolling, this drives Chromium's real scroll
+    /// pipeline — needed to verify scroll chaining and `overscroll-behavior`,
+    /// which a synthetic WheelEvent dispatch never reaches.
+    Wheel {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+        /// Scroll delta as dX,dY in CSS pixels (e.g. 0,300 scrolls down)
+        #[arg(allow_hyphen_values = true)]
+        delta: Point,
+    },
+
     /// Press a key combo with a trusted key event (CDP Input.dispatchKeyEvent)
     ///
     /// For modifier shortcuts (Cmd+D, Cmd+S, Ctrl+Shift+I, ...) that
@@ -626,6 +642,22 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "dblclick-at",
                     "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Wheel { session, at, delta } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info).await?;
+            client.wheel((at.x, at.y), (delta.x, delta.y)).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Scrolled at: {at} by {delta}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "wheel",
+                    "at": { "x": at.x, "y": at.y },
+                    "delta": { "x": delta.x, "y": delta.y },
                 }))
                 .unwrap()),
             }
