@@ -689,6 +689,7 @@ impl CdpClient {
         x: f64,
         y: f64,
         click_count: i64,
+        timeout_ms: u64,
     ) -> KhoraResult<()> {
         let event = DispatchMouseEventParams::builder()
             .r#type(kind)
@@ -699,9 +700,13 @@ impl CdpClient {
             .click_count(click_count)
             .build()
             .map_err(KhoraError::Cdp)?;
-        page.execute(event)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            page.execute(event),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
         Ok(())
     }
 
@@ -721,6 +726,7 @@ impl CdpClient {
         to: (f64, f64),
         steps: u32,
         delay_ms: u64,
+        timeout_ms: u64,
     ) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let delay = std::time::Duration::from_millis(delay_ms);
@@ -731,6 +737,7 @@ impl CdpClient {
             from.0,
             from.1,
             1,
+            timeout_ms,
         )
         .await?;
 
@@ -739,13 +746,27 @@ impl CdpClient {
             let t = f64::from(i) / f64::from(steps);
             let x = from.0 + (to.0 - from.0) * t;
             let y = from.1 + (to.1 - from.1) * t;
-            self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, x, y, 1)
-                .await?;
+            self.dispatch_mouse_event(
+                &page,
+                DispatchMouseEventType::MouseMoved,
+                x,
+                y,
+                1,
+                timeout_ms,
+            )
+            .await?;
         }
 
         tokio::time::sleep(delay).await;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, to.0, to.1, 1)
-            .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseReleased,
+            to.0,
+            to.1,
+            1,
+            timeout_ms,
+        )
+        .await?;
         Ok(())
     }
 
@@ -756,26 +777,47 @@ impl CdpClient {
     /// drag as separate CLI invocations, so mid-gesture state (e.g. a
     /// marquee mid-drag) can be inspected with an ordinary `screenshot` call
     /// between steps instead of racing a backgrounded `drag`.
-    pub async fn mouse_down(&self, at: (f64, f64)) -> KhoraResult<()> {
+    pub async fn mouse_down(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
-            .await
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MousePressed,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Move the mouse to a point with a trusted event, carrying over
     /// whatever button state a prior [`Self::mouse_down`] established.
-    pub async fn mouse_move(&self, at: (f64, f64)) -> KhoraResult<()> {
+    pub async fn mouse_move(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseMoved, at.0, at.1, 1)
-            .await
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseMoved,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Release the left mouse button at a point with a trusted event,
     /// completing a gesture started with [`Self::mouse_down`].
-    pub async fn mouse_up(&self, at: (f64, f64)) -> KhoraResult<()> {
+    pub async fn mouse_up(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
-            .await
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseReleased,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Click at a raw viewport point with trusted mouse events (CDP
@@ -785,28 +827,70 @@ impl CdpClient {
     /// element, this hits whatever is actually at `(x, y)` — needed to
     /// verify pixel-precise hit targets (overlapping elements, canvas-drawn
     /// UI, z-order) that a selector can't express.
-    pub async fn click_at(&self, at: (f64, f64)) -> KhoraResult<()> {
+    pub async fn click_at(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
-            .await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
-            .await
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MousePressed,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseReleased,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Double-click at a raw viewport point with trusted mouse events: two
     /// press/release pairs at the same point, the second pair carrying
     /// `clickCount: 2` — the signal Chromium uses to fire `dblclick` instead
     /// of two separate `click` events.
-    pub async fn dblclick_at(&self, at: (f64, f64)) -> KhoraResult<()> {
+    pub async fn dblclick_at(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 1)
-            .await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 1)
-            .await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MousePressed, at.0, at.1, 2)
-            .await?;
-        self.dispatch_mouse_event(&page, DispatchMouseEventType::MouseReleased, at.0, at.1, 2)
-            .await
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MousePressed,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseReleased,
+            at.0,
+            at.1,
+            1,
+            timeout_ms,
+        )
+        .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MousePressed,
+            at.0,
+            at.1,
+            2,
+            timeout_ms,
+        )
+        .await?;
+        self.dispatch_mouse_event(
+            &page,
+            DispatchMouseEventType::MouseReleased,
+            at.0,
+            at.1,
+            2,
+            timeout_ms,
+        )
+        .await
     }
 
     /// Scroll with a trusted native wheel event at a viewport point (CDP
@@ -819,7 +903,12 @@ impl CdpClient {
     /// `scrollTop` untouched. This dispatches the real event Chromium's
     /// compositor scrolls in response to, at whatever element sits under
     /// `at`.
-    pub async fn wheel(&self, at: (f64, f64), delta: (f64, f64)) -> KhoraResult<()> {
+    pub async fn wheel(
+        &self,
+        at: (f64, f64),
+        delta: (f64, f64),
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let event = DispatchMouseEventParams::builder()
             .r#type(DispatchMouseEventType::MouseWheel)
@@ -829,9 +918,13 @@ impl CdpClient {
             .delta_y(delta.1)
             .build()
             .map_err(KhoraError::Cdp)?;
-        page.execute(event)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            page.execute(event),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
         Ok(())
     }
 
@@ -843,7 +936,7 @@ impl CdpClient {
     /// modifier shortcuts are handled by the browser/OS or by listeners
     /// checking `isTrusted`, which synthetic `KeyboardEvent` dispatch can't
     /// satisfy.
-    pub async fn key_press(&self, combo: &str) -> KhoraResult<()> {
+    pub async fn key_press(&self, combo: &str, timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let (modifiers, key_name) = Self::parse_key_combo(combo)?;
         let (key, code, vk) = Self::key_info(key_name).ok_or_else(|| {
@@ -873,17 +966,25 @@ impl CdpClient {
             .r#type(DispatchKeyEventType::RawKeyDown)
             .build()
             .map_err(KhoraError::Cdp)?;
-        page.execute(down)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            page.execute(down),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
         let up = builder
             .r#type(DispatchKeyEventType::KeyUp)
             .build()
             .map_err(KhoraError::Cdp)?;
-        page.execute(up)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            page.execute(up),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
 
         self.force_compositor_frame(&page).await;
         Ok(())

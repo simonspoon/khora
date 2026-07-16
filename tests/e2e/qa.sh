@@ -386,6 +386,25 @@ else
   ((FAIL++))
 fi
 
+# Regression for mesa task 385: trusted-input commands used to ignore
+# --timeout/KHORA_TIMEOUT entirely, inheriting chromiumoxide's hardcoded 30s
+# internal request timeout instead. click-at now bounds its CDP round-trip
+# with the same timeout goto()/wait-for use, so an unreasonably short
+# --timeout must fail fast (exit 3) rather than hang toward 30s.
+START=$(date +%s)
+OUTPUT=$("$KHORA" --timeout 1 click-at "$SESSION" "$POINT" 2>&1)
+EC=$?
+ELAPSED=$(($(date +%s) - START))
+assert_exit "click-at --timeout 1 exits 3" "$EC" 3
+assert_contains "click-at --timeout 1 reports timeout" "$OUTPUT" "timed out after 1ms"
+if [ "$ELAPSED" -lt 10 ]; then
+  printf "  ${GREEN}PASS${NC}  click-at --timeout 1 failed fast (${ELAPSED}s)\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  click-at --timeout 1 took ${ELAPSED}s (expected <10s)\n"
+  ((FAIL++))
+fi
+
 # ── console ──────────────────────────────────────────────
 
 printf "\n${BOLD}▸ console${NC}\n"

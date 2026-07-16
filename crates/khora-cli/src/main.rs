@@ -556,7 +556,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
             client
-                .drag((from.x, from.y), (to.x, to.y), *steps, *delay)
+                .drag((from.x, from.y), (to.x, to.y), *steps, *delay, cli.timeout)
                 .await?;
 
             match cli.format {
@@ -575,7 +575,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::MouseDown { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.mouse_down((at.x, at.y)).await?;
+            client.mouse_down((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Mouse down: {at}")),
@@ -590,7 +590,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::MouseMove { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.mouse_move((at.x, at.y)).await?;
+            client.mouse_move((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Mouse moved: {at}")),
@@ -605,7 +605,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::MouseUp { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.mouse_up((at.x, at.y)).await?;
+            client.mouse_up((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Mouse up: {at}")),
@@ -620,7 +620,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::ClickAt { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.click_at((at.x, at.y)).await?;
+            client.click_at((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Clicked at: {at}")),
@@ -635,7 +635,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::DblclickAt { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.dblclick_at((at.x, at.y)).await?;
+            client.dblclick_at((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Double-clicked at: {at}")),
@@ -650,7 +650,9 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::Wheel { session, at, delta } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.wheel((at.x, at.y), (delta.x, delta.y)).await?;
+            client
+                .wheel((at.x, at.y), (delta.x, delta.y), cli.timeout)
+                .await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Scrolled at: {at} by {delta}")),
@@ -666,7 +668,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
         Command::Key { session, combo } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info).await?;
-            client.key_press(combo).await?;
+            client.key_press(combo, cli.timeout).await?;
 
             match cli.format {
                 OutputFormat::Text => Ok(format!("Pressed: {combo}")),
