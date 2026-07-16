@@ -328,6 +328,8 @@ khora --timeout 10000 wait-for "$S" ".slow-element"
 export KHORA_TIMEOUT=10000
 ```
 
+`--timeout` also bounds reconnecting to an existing session (used by every command, including `kill`/`status`), so a wedged Chrome fails fast instead of hanging indefinitely.
+
 ## Exit codes
 
 | Code | Meaning |

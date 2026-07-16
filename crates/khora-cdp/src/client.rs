@@ -116,12 +116,21 @@ impl CdpClient {
 
     /// Connect to an existing Chrome instance using session info.
     /// Fetches existing targets so that pages from previous sessions are visible.
-    pub async fn connect(session: &SessionInfo) -> KhoraResult<Self> {
+    ///
+    /// A wedged Chrome (e.g. a hung compositor) can leave the websocket open
+    /// but unresponsive, so both the initial handshake and the target fetch
+    /// are bounded by `timeout_ms` — otherwise every command, including
+    /// `kill`, could hang indefinitely trying to reach it.
+    pub async fn connect(session: &SessionInfo, timeout_ms: u64) -> KhoraResult<Self> {
         tracing::info!(session_id = %session.id, ws_url = %session.ws_url, "connecting to Chrome");
 
-        let (mut browser, mut handler) = Browser::connect(&session.ws_url)
-            .await
-            .map_err(|e| KhoraError::SessionDead(format!("{}: {e}", session.id)))?;
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+
+        let (mut browser, mut handler) =
+            tokio::time::timeout(timeout, Browser::connect(&session.ws_url))
+                .await
+                .map_err(|_| KhoraError::Timeout(timeout_ms))?
+                .map_err(|e| KhoraError::SessionDead(format!("{}: {e}", session.id)))?;
 
         let handler_handle = tokio::spawn(async move {
             while let Some(event) = handler.next().await {
@@ -132,7 +141,7 @@ impl CdpClient {
         });
 
         // Fetch existing targets so pages from previous connections are visible
-        let _ = browser.fetch_targets().await;
+        let _ = tokio::time::timeout(timeout, browser.fetch_targets()).await;
         // Give a moment for pages to be registered internally
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -731,6 +740,15 @@ impl CdpClient {
         let page = self.get_or_create_page().await?;
         let delay = std::time::Duration::from_millis(delay_ms);
 
+        // A never-painted page (e.g. about:blank) has no pending compositor
+        // frame, so the first MouseMoved dispatch below can pay a ~5s
+        // hit-test tax that races khora's default 5000ms timeout (reported
+        // against mesa task 385; not reproduced live against this repo's
+        // current Chrome — timing is version/load-dependent). Force a frame
+        // up front, once, so the interpolated moves that follow stay
+        // fast — preventive, mirroring key_press's proven fix below.
+        self.force_compositor_frame(&page).await;
+
         self.dispatch_mouse_event(
             &page,
             DispatchMouseEventType::MousePressed,
@@ -794,6 +812,10 @@ impl CdpClient {
     /// whatever button state a prior [`Self::mouse_down`] established.
     pub async fn mouse_move(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
+        // Step-wise mouse-move is its own CLI invocation, so there's no
+        // memory of whether this page has ever painted a frame. Nudge one
+        // unconditionally — preventive, same reasoning as drag()'s comment.
+        self.force_compositor_frame(&page).await;
         self.dispatch_mouse_event(
             &page,
             DispatchMouseEventType::MouseMoved,
@@ -993,17 +1015,21 @@ impl CdpClient {
     /// Nudge Chromium into producing a fresh compositor frame, discarding
     /// the result.
     ///
-    /// A trusted `Input.dispatchKeyEvent` leaves the renderer without a
-    /// pending frame: the next `mouseMoved` dispatch pays a ~5s hit-test
-    /// tax and the next `mouseWheel` dispatch never acks at all (hangs the
-    /// full 30s chromiumoxide request timeout) until *something* forces a
-    /// frame to be produced. A 1x1 screenshot is the cheapest CDP call
-    /// observed to force that frame (a real `captureScreenshot` inherently
-    /// waits on one) — verified live: it also fixes the mouse-move
-    /// degradation, confirming both symptoms share this one root cause.
-    /// Best-effort: swallow failures rather than fail the key press over a
-    /// side-effect nudge, and cap the wait so a wedged nudge can't turn a
-    /// fast key press into a slow one.
+    /// A page with no pending compositor frame — either because a trusted
+    /// `Input.dispatchKeyEvent` just consumed the pending one, or because
+    /// the page (e.g. `about:blank`) has never painted at all — makes the
+    /// next `mouseMoved` dispatch pay a ~5s hit-test tax, and the next
+    /// `mouseWheel` dispatch never ack at all (hangs the full 30s
+    /// chromiumoxide request timeout), until *something* forces a frame to
+    /// be produced. A 1x1 screenshot is the cheapest CDP call observed to
+    /// force that frame (a real `captureScreenshot` inherently waits on
+    /// one) — verified live: it also fixes the mouse-move degradation,
+    /// confirming both symptoms share this one root cause. Callers use this
+    /// both reactively (`key_press`, after dispatch, to undo the desync it
+    /// caused) and proactively (`drag`, `mouse_move`, before dispatch, to
+    /// pre-warm a possibly-cold compositor). Best-effort: swallow failures
+    /// rather than fail the caller over a side-effect nudge, and cap the
+    /// wait so a wedged nudge can't turn a fast call into a slow one.
     async fn force_compositor_frame(&self, page: &Page) {
         let params = ScreenshotParams::builder()
             .format(CaptureScreenshotFormat::Png)

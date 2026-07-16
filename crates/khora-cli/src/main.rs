@@ -453,7 +453,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             no_cache,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.navigate(url, *no_cache).await?;
 
             match cli.format {
@@ -478,7 +478,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             mobile,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client
                 .set_viewport(size.width, size.height, *dpr, *mobile)
                 .await?;
@@ -507,14 +507,14 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::Find { session, selector } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let elements = client.find_elements(selector).await?;
             Ok(khora_core::output::format_elements(&elements, cli.format))
         }
 
         Command::Click { session, selector } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.click(selector).await?;
 
             match cli.format {
@@ -532,7 +532,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             text,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.type_text(selector, text).await?;
 
             match cli.format {
@@ -554,7 +554,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             delay,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client
                 .drag((from.x, from.y), (to.x, to.y), *steps, *delay, cli.timeout)
                 .await?;
@@ -574,7 +574,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::MouseDown { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.mouse_down((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
@@ -589,7 +589,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::MouseMove { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.mouse_move((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
@@ -604,7 +604,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::MouseUp { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.mouse_up((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
@@ -619,7 +619,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::ClickAt { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.click_at((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
@@ -634,7 +634,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::DblclickAt { session, at } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.dblclick_at((at.x, at.y), cli.timeout).await?;
 
             match cli.format {
@@ -649,7 +649,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::Wheel { session, at, delta } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client
                 .wheel((at.x, at.y), (delta.x, delta.y), cli.timeout)
                 .await?;
@@ -667,7 +667,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::Key { session, combo } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client.key_press(combo, cli.timeout).await?;
 
             match cli.format {
@@ -686,7 +686,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             selector,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let png_bytes = client.screenshot(selector.as_deref()).await?;
 
             let path = PathBuf::from(output.as_deref().unwrap_or("khora-screenshot.png"));
@@ -709,7 +709,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::Text { session, selector } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let texts = client.get_text(selector).await?;
             Ok(khora_core::output::format_text(&texts, cli.format))
         }
@@ -720,7 +720,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             attr,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let value = client.get_attribute(selector, attr).await?;
 
             match cli.format {
@@ -740,7 +740,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             timeout,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let t = timeout.unwrap_or(cli.timeout);
             client.wait_for(selector, t).await?;
 
@@ -759,7 +759,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             timeout,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let t = timeout.unwrap_or(cli.timeout);
             client.wait_gone(selector, t).await?;
 
@@ -774,21 +774,21 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
         Command::Console { session } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let messages = client.console_messages().await?;
             Ok(khora_core::output::format_console(&messages, cli.format))
         }
 
         Command::Network { session } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let requests = client.network_requests().await?;
             Ok(khora_core::output::format_network(&requests, cli.format))
         }
 
         Command::Eval { session, js } => {
             let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info).await?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
             let result = client.eval(js).await?;
 
             match cli.format {
@@ -810,9 +810,20 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
             let mut killed = Vec::new();
             for info in &sessions_to_kill {
-                match CdpClient::connect(info).await {
+                match CdpClient::connect(info, cli.timeout).await {
                     Ok(client) => {
                         let _ = client.close().await;
+                    }
+                    Err(KhoraError::Timeout(_)) => {
+                        // Connect reached a live websocket but Chrome never
+                        // answered — a wedged process, not a dead one, so
+                        // unlike SessionDead below it's still safe (and
+                        // necessary) to signal this specific PID directly
+                        // rather than leaving it running forever.
+                        khora_cdp::kill_process(info.pid).await;
+                        if let Some(ref dir) = info.data_dir {
+                            khora_cdp::cleanup_data_dir(dir);
+                        }
                     }
                     Err(_) => {
                         // Connect failed — Chrome is already gone, or this PID has
@@ -851,7 +862,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             if let Some(id) = session {
                 match khora_cdp::load_and_verify(id) {
                     Ok(info) => {
-                        let alive = match CdpClient::connect(&info).await {
+                        let alive = match CdpClient::connect(&info, cli.timeout).await {
                             Ok(client) => client.is_alive(),
                             Err(_) => false,
                         };
@@ -911,9 +922,19 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
                 if !is_dead {
                     // Live session: attempt graceful close.
-                    match CdpClient::connect(info).await {
+                    match CdpClient::connect(info, cli.timeout).await {
                         Ok(client) => {
                             let _ = client.close().await;
+                        }
+                        Err(KhoraError::Timeout(_)) => {
+                            // Wedged, not dead — the PID is still this
+                            // session's Chrome, so signal it directly
+                            // instead of leaving it running (see Kill's
+                            // matching arm for the reasoning).
+                            khora_cdp::kill_process(info.pid).await;
+                            if let Some(ref dir) = info.data_dir {
+                                khora_cdp::cleanup_data_dir(dir);
+                            }
                         }
                         Err(_) => {
                             // Connect failed — no verified handle to this PID

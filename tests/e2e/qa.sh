@@ -120,6 +120,19 @@ EC=$?
 assert_exit "status exits 0" "$EC" 0
 assert_contains "session is alive" "$OUTPUT" "alive"
 
+# Smoke check for mesa task 386: mouse_move on a never-painted page (the
+# fresh about:blank tab a launch starts on, before any navigate) is where a
+# ~5s cold-compositor hit-test tax was reported (mesa task 385), which
+# would race khora's 5000ms default timeout. mouse_move now force-warms the
+# compositor first as a preventive measure — but that tax did not
+# reproduce live against this repo's current Chrome even without the fix,
+# so this only confirms the command still works on a fresh tab, not that it
+# catches the tax; see client.rs's force_compositor_frame call in
+# mouse_move for the honest caveat.
+OUTPUT=$("$KHORA" mouse-move "$SESSION" "10,10" 2>&1)
+EC=$?
+assert_exit "mouse-move on fresh about:blank exits 0" "$EC" 0
+
 # ── navigate ─────────────────────────────────────────────
 
 printf "\n${BOLD}▸ navigate${NC}\n"
@@ -529,6 +542,32 @@ CHROME_PID=$(echo "$OUTPUT" | grep -oE '"pid": [0-9]+' | awk '{print $2}')
 OUTPUT=$("$KHORA" -f json find "$SESSION" "#greeting" 2>&1)
 assert_contains "json find has bracket" "$OUTPUT" "["
 
+# Regression for mesa task 386: CdpClient::connect() used to have no
+# timeout bound at all, so a wedged Chrome could leave `khora kill` (or any
+# other command routed through connect(), like `status`) hanging
+# indefinitely. connect() now bounds its handshake with
+# --timeout/KHORA_TIMEOUT, so an unreasonably short --timeout must resolve
+# fast rather than hang — `status` reports the session dead (same as any
+# other connect() failure, e.g. a truly-gone Chrome) instead of blocking.
+START=$(date +%s)
+OUTPUT=$("$KHORA" --timeout 1 status "$SESSION" 2>&1)
+EC=$?
+ELAPSED=$(($(date +%s) - START))
+assert_exit "status --timeout 1 exits 0" "$EC" 0
+assert_contains "status --timeout 1 reports dead (connect couldn't complete in time)" "$OUTPUT" "dead"
+if [ "$ELAPSED" -lt 10 ]; then
+  printf "  ${GREEN}PASS${NC}  status --timeout 1 resolved fast (${ELAPSED}s)\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  status --timeout 1 took ${ELAPSED}s (expected <10s)\n"
+  ((FAIL++))
+fi
+
+# Session must still be usable after a connect()-level timeout — it only
+# bounded that one call, it didn't tear anything down.
+OUTPUT=$("$KHORA" status "$SESSION" 2>&1)
+assert_contains "session still alive after connect timeout" "$OUTPUT" "alive"
+
 # ── kill ─────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ kill${NC}\n"
@@ -545,6 +584,33 @@ assert_contains "session gone after kill" "$OUTPUT" "not found"
 # Verify the underlying Chrome process actually died, not just the session file
 if [[ -n "$CHROME_PID" && "$CHROME_PID" != "0" ]]; then
   assert_process_gone "Chrome process $CHROME_PID exited after kill" "$CHROME_PID"
+fi
+
+# Regression for mesa task 386: Kill's connect()-error handling used to
+# assume any failure meant Chrome was already gone and skipped signaling
+# the PID. Now that connect() can also fail with Timeout (Chrome alive but
+# unresponsive, not confirmed dead), treating it the same way would trade
+# the old 30+min hang for a *silent* Chrome process leak — worse, since it
+# reports success. --timeout 1 deterministically forces that Timeout arm
+# (status --timeout 1 above proves it), so drive it directly and confirm
+# the PID is actually signaled rather than left running.
+printf "\n${BOLD}▸ kill --timeout 1 (Timeout arm doesn't leak the process)${NC}\n"
+LEAK_OUTPUT=$("$KHORA" launch 2>&1)
+LEAK_SESSION=$(echo "$LEAK_OUTPUT" | grep -oE 'Session: [a-f0-9]+' | head -1 | awk '{print $2}')
+LEAK_PID=$(echo "$LEAK_OUTPUT" | grep -oE 'PID: [0-9]+' | head -1 | awk '{print $2}')
+if [[ -z "$LEAK_SESSION" || -z "$LEAK_PID" || "$LEAK_PID" == "0" ]]; then
+  printf "  ${RED}FAIL${NC}  could not launch throwaway session for kill-timeout leak regression\n"
+  ((FAIL++))
+else
+  OUTPUT=$("$KHORA" --timeout 1 kill "$LEAK_SESSION" 2>&1)
+  EC=$?
+  assert_exit "kill --timeout 1 exits 0" "$EC" 0
+  # kill_process() itself already waits out its SIGTERM/SIGKILL grace period
+  # before the CLI returns; this is just headroom for scheduling jitter.
+  sleep 1
+  assert_process_gone "kill --timeout 1 still terminates Chrome (no leak)" "$LEAK_PID"
+  # Safety net: don't leave a leaked Chrome running if the assertion above failed.
+  kill -9 "$LEAK_PID" 2>/dev/null || true
 fi
 
 # ── summary ──────────────────────────────────────────────
