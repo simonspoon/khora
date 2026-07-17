@@ -404,17 +404,23 @@ fi
 # internal request timeout instead. click-at now bounds its CDP round-trip
 # with the same timeout goto()/wait-for use, so an unreasonably short
 # --timeout must fail fast (exit 3) rather than hang toward 30s.
+#
+# Uses 0ms rather than 1ms: on fast/warm hardware the real CDP round-trip
+# can complete in under 1ms, so a 1ms bound is a race the op sometimes wins
+# (verified independently — the timeout mechanism itself is not at fault).
+# A 0ms tokio::time::timeout always elapses on first poll, so this is
+# deterministic.
 START=$(date +%s)
-OUTPUT=$("$KHORA" --timeout 1 click-at "$SESSION" "$POINT" 2>&1)
+OUTPUT=$("$KHORA" --timeout 0 click-at "$SESSION" "$POINT" 2>&1)
 EC=$?
 ELAPSED=$(($(date +%s) - START))
-assert_exit "click-at --timeout 1 exits 3" "$EC" 3
-assert_contains "click-at --timeout 1 reports timeout" "$OUTPUT" "timed out after 1ms"
+assert_exit "click-at --timeout 0 exits 3" "$EC" 3
+assert_contains "click-at --timeout 0 reports timeout" "$OUTPUT" "timed out after 0ms"
 if [ "$ELAPSED" -lt 10 ]; then
-  printf "  ${GREEN}PASS${NC}  click-at --timeout 1 failed fast (${ELAPSED}s)\n"
+  printf "  ${GREEN}PASS${NC}  click-at --timeout 0 failed fast (${ELAPSED}s)\n"
   ((PASS++))
 else
-  printf "  ${RED}FAIL${NC}  click-at --timeout 1 took ${ELAPSED}s (expected <10s)\n"
+  printf "  ${RED}FAIL${NC}  click-at --timeout 0 took ${ELAPSED}s (expected <10s)\n"
   ((FAIL++))
 fi
 
@@ -549,17 +555,20 @@ assert_contains "json find has bracket" "$OUTPUT" "["
 # --timeout/KHORA_TIMEOUT, so an unreasonably short --timeout must resolve
 # fast rather than hang — `status` reports the session dead (same as any
 # other connect() failure, e.g. a truly-gone Chrome) instead of blocking.
+#
+# Uses 0ms rather than 1ms — see the click-at --timeout 0 comment above;
+# same race, same fix.
 START=$(date +%s)
-OUTPUT=$("$KHORA" --timeout 1 status "$SESSION" 2>&1)
+OUTPUT=$("$KHORA" --timeout 0 status "$SESSION" 2>&1)
 EC=$?
 ELAPSED=$(($(date +%s) - START))
-assert_exit "status --timeout 1 exits 0" "$EC" 0
-assert_contains "status --timeout 1 reports dead (connect couldn't complete in time)" "$OUTPUT" "dead"
+assert_exit "status --timeout 0 exits 0" "$EC" 0
+assert_contains "status --timeout 0 reports dead (connect couldn't complete in time)" "$OUTPUT" "dead"
 if [ "$ELAPSED" -lt 10 ]; then
-  printf "  ${GREEN}PASS${NC}  status --timeout 1 resolved fast (${ELAPSED}s)\n"
+  printf "  ${GREEN}PASS${NC}  status --timeout 0 resolved fast (${ELAPSED}s)\n"
   ((PASS++))
 else
-  printf "  ${RED}FAIL${NC}  status --timeout 1 took ${ELAPSED}s (expected <10s)\n"
+  printf "  ${RED}FAIL${NC}  status --timeout 0 took ${ELAPSED}s (expected <10s)\n"
   ((FAIL++))
 fi
 
@@ -591,10 +600,11 @@ fi
 # the PID. Now that connect() can also fail with Timeout (Chrome alive but
 # unresponsive, not confirmed dead), treating it the same way would trade
 # the old 30+min hang for a *silent* Chrome process leak — worse, since it
-# reports success. --timeout 1 deterministically forces that Timeout arm
-# (status --timeout 1 above proves it), so drive it directly and confirm
-# the PID is actually signaled rather than left running.
-printf "\n${BOLD}▸ kill --timeout 1 (Timeout arm doesn't leak the process)${NC}\n"
+# reports success. --timeout 0 deterministically forces that Timeout arm
+# (status --timeout 0 above proves it; --timeout 1 is a race the real
+# connect() sometimes wins on fast hardware), so drive it directly and
+# confirm the PID is actually signaled rather than left running.
+printf "\n${BOLD}▸ kill --timeout 0 (Timeout arm doesn't leak the process)${NC}\n"
 LEAK_OUTPUT=$("$KHORA" launch 2>&1)
 LEAK_SESSION=$(echo "$LEAK_OUTPUT" | grep -oE 'Session: [a-f0-9]+' | head -1 | awk '{print $2}')
 LEAK_PID=$(echo "$LEAK_OUTPUT" | grep -oE 'PID: [0-9]+' | head -1 | awk '{print $2}')
@@ -602,13 +612,13 @@ if [[ -z "$LEAK_SESSION" || -z "$LEAK_PID" || "$LEAK_PID" == "0" ]]; then
   printf "  ${RED}FAIL${NC}  could not launch throwaway session for kill-timeout leak regression\n"
   ((FAIL++))
 else
-  OUTPUT=$("$KHORA" --timeout 1 kill "$LEAK_SESSION" 2>&1)
+  OUTPUT=$("$KHORA" --timeout 0 kill "$LEAK_SESSION" 2>&1)
   EC=$?
-  assert_exit "kill --timeout 1 exits 0" "$EC" 0
+  assert_exit "kill --timeout 0 exits 0" "$EC" 0
   # kill_process() itself already waits out its SIGTERM/SIGKILL grace period
   # before the CLI returns; this is just headroom for scheduling jitter.
   sleep 1
-  assert_process_gone "kill --timeout 1 still terminates Chrome (no leak)" "$LEAK_PID"
+  assert_process_gone "kill --timeout 0 still terminates Chrome (no leak)" "$LEAK_PID"
   # Safety net: don't leave a leaked Chrome running if the assertion above failed.
   kill -9 "$LEAK_PID" 2>/dev/null || true
 fi
