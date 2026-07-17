@@ -104,6 +104,24 @@ fn test_type_help() {
 }
 
 #[test]
+fn test_type_keys_help() {
+    khora()
+        .args(["type-keys", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted per-character key events"));
+}
+
+#[test]
+fn test_type_keys_nonexistent_session() {
+    khora()
+        .args(["type-keys", "nonexistent_xyz", "#input", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_drag_help() {
     khora()
         .args(["drag", "--help"])

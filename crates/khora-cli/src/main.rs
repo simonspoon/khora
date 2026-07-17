@@ -152,6 +152,24 @@ enum Command {
         text: String,
     },
 
+    /// Type text with trusted per-character key events (CDP Input.dispatchKeyEvent)
+    ///
+    /// For canvas/WebGL-rendered widgets that manage their own key handling
+    /// off a hidden textarea and never read `.value` (xterm.js and similar
+    /// terminal emulators) — `type` silently no-ops on them since nothing
+    /// listens to the `input`/`change` events it dispatches. This sends the
+    /// same trusted keydown/keypress/keyup sequence a real keyboard
+    /// produces. Doesn't handle control characters (Enter, Tab, ...); send
+    /// those individually with `key`.
+    TypeKeys {
+        /// Session ID
+        session: String,
+        /// CSS selector for the element to focus
+        selector: String,
+        /// Text to type
+        text: String,
+    },
+
     /// Drag from one point to another with trusted mouse events (CDP Input.dispatchMouseEvent)
     Drag {
         /// Session ID
@@ -539,6 +557,26 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 OutputFormat::Text => Ok(format!("Typed \"{text}\" into {selector}")),
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "type",
+                    "selector": selector,
+                    "text": text,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::TypeKeys {
+            session,
+            selector,
+            text,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client.type_keys(selector, text, cli.timeout).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Typed \"{text}\" into {selector} (real keys)")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "type-keys",
                     "selector": selector,
                     "text": text,
                 }))

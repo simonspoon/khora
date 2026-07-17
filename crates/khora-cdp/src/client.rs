@@ -351,6 +351,12 @@ impl CdpClient {
     /// assignment) so React's instance-level value tracker sees a real
     /// change and fires onChange, then dispatches input/change events so
     /// frameworks (React, Vue, etc.) pick up the value.
+    ///
+    /// This silently no-ops on canvas/WebGL-rendered widgets that manage
+    /// their own key handling off a hidden textarea and never read `.value`
+    /// (xterm.js and similar terminal emulators) — no error, no visible
+    /// effect, since the `input`/`change` events dispatched here have no
+    /// listener. Use [`Self::type_keys`] for those.
     pub async fn type_text(&self, selector: &str, text: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
@@ -399,6 +405,111 @@ impl CdpClient {
             }
             return Err(KhoraError::ElementNotFound(selector.to_string()));
         }
+        Ok(())
+    }
+
+    /// Type text into an element matching a CSS selector using trusted
+    /// per-character key events (CDP `Input.dispatchKeyEvent`: rawKeyDown +
+    /// char + keyUp per character), instead of the JS value-assignment
+    /// [`Self::type_text`] uses.
+    ///
+    /// `type` only reaches elements backed by real form-control state that a
+    /// framework listens to `input`/`change` on. Canvas/WebGL-rendered
+    /// widgets that manage their own key handling off a hidden textarea
+    /// (xterm.js and similar terminal emulators) never read `.value` — this
+    /// dispatches the same trusted keydown/keypress/keyup sequence a real
+    /// keyboard produces, which any keydown/keypress listener, including
+    /// xterm.js's, picks up.
+    ///
+    /// Control characters (Enter, Tab, Backspace, arrows, ...) aren't
+    /// handled here — send those individually with `key`.
+    pub async fn type_keys(&self, selector: &str, text: &str, timeout_ms: u64) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let js = format!(
+            r#"
+            (() => {{
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ found: false, error: e.message }};
+                }}
+                if (!el) return {{ found: false }};
+                el.focus();
+                return {{ found: true }};
+            }})()
+            "#,
+            selector = serde_json::to_string(selector).unwrap_or_default()
+        );
+
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let value = result
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
+            return Err(KhoraError::ElementNotFound(selector.to_string()));
+        }
+
+        for c in text.chars() {
+            let (key, code, vk) = Self::char_key_info(c);
+            let builder = DispatchKeyEventParams::builder()
+                .code(code)
+                .key(key.clone())
+                .windows_virtual_key_code(vk)
+                .native_virtual_key_code(vk);
+
+            let down = builder
+                .clone()
+                .r#type(DispatchKeyEventType::RawKeyDown)
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                page.execute(down),
+            )
+            .await
+            .map_err(|_| KhoraError::Timeout(timeout_ms))?
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+            let char_event = builder
+                .clone()
+                .r#type(DispatchKeyEventType::Char)
+                .text(key.clone())
+                .unmodified_text(key.clone())
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                page.execute(char_event),
+            )
+            .await
+            .map_err(|_| KhoraError::Timeout(timeout_ms))?
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+            let up = builder
+                .r#type(DispatchKeyEventType::KeyUp)
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                page.execute(up),
+            )
+            .await
+            .map_err(|_| KhoraError::Timeout(timeout_ms))?
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+
+        self.force_compositor_frame(&page).await;
         Ok(())
     }
 
@@ -1121,6 +1232,33 @@ impl CdpClient {
             _ => return None,
         };
         Some((key.to_string(), code.to_string(), vk))
+    }
+
+    /// Look up the CDP `key`, `code`, and Windows virtual-key-code to
+    /// produce a given character via [`Self::type_keys`]. Unlike
+    /// [`Self::key_info`], `key` preserves the character's actual case (a
+    /// real Shift+H keydown reports `key: "H"`, not `"h"`) — `code` is the
+    /// physical key position, which stays the same regardless of case.
+    /// Characters with no known physical key (punctuation, Unicode outside
+    /// ASCII alnum/space) fall back to `code: "Unidentified"` and a
+    /// best-effort virtual-key code — harmless since `type_keys` targets are
+    /// expected to key off `key`, not `code`/`keyCode`.
+    fn char_key_info(c: char) -> (String, String, i64) {
+        if c.is_ascii_alphabetic() {
+            let upper = c.to_ascii_uppercase();
+            return (c.to_string(), format!("Key{upper}"), i64::from(upper as u8));
+        }
+        if c.is_ascii_digit() {
+            return (c.to_string(), format!("Digit{c}"), i64::from(c as u8));
+        }
+        if c == ' ' {
+            return (" ".to_string(), "Space".to_string(), 32);
+        }
+        (
+            c.to_string(),
+            "Unidentified".to_string(),
+            i64::from(u32::from(c)),
+        )
     }
 
     /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.

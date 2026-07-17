@@ -211,6 +211,26 @@ khora key "$S" "Cmd+Shift+D"     # app-defined shortcut
 khora key "$S" "Escape"          # no modifier — just the key, e.g. dismiss a modal
 ```
 
+### Canvas-rendered inputs (xterm.js and similar)
+
+`type` sets the target element's `.value` via its native setter and fires
+`input`/`change` — that only reaches elements backed by real form-control
+state that something is listening to. Canvas/WebGL-rendered widgets that
+manage their own key handling off a hidden textarea (xterm.js and similar
+terminal emulators) never read `.value`: `type` silently no-ops on them — no
+error, no visible effect. `type-keys` dispatches the same trusted
+keydown/keypress/keyup sequence a real keyboard produces (CDP
+`Input.dispatchKeyEvent`, one rawKeyDown + char + keyUp per character), which
+any keydown/keypress listener, including xterm.js's, picks up.
+
+```bash
+khora type-keys "$S" ".xterm-helper-textarea" "ls -la"
+khora key "$S" "Enter"           # type-keys doesn't send control characters
+```
+
+`type-keys` doesn't handle control characters (Enter, Tab, Backspace,
+arrows, ...) — send those individually with `key`.
+
 ### Scrolling
 
 `wheel` dispatches a trusted native wheel event (CDP `Input.dispatchMouseEvent`,

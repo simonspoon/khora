@@ -32,6 +32,19 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local label="$1" actual="$2" unexpected="$3"
+  if echo "$actual" | grep -qF -- "$unexpected"; then
+    printf "  ${RED}FAIL${NC}  %s\n" "$label"
+    printf "       expected NOT to contain: %s\n" "$unexpected"
+    printf "       got: %s\n" "$actual"
+    ((FAIL++))
+  else
+    printf "  ${GREEN}PASS${NC}  %s\n" "$label"
+    ((PASS++))
+  fi
+}
+
 assert_exit() {
   local label="$1" actual="$2" expected="$3"
   if [[ "$actual" -eq "$expected" ]]; then
@@ -398,6 +411,35 @@ else
   printf "  ${RED}FAIL${NC}  wheel after key took ${ELAPSED}s (expected <10s, was hanging 30s pre-fix)\n"
   ((FAIL++))
 fi
+
+# ── type-keys ────────────────────────────────────────────
+
+# Regression for mesa task 400: `type` sets .value via JS, which xterm.js-style
+# widgets (a hidden textarea that only reacts to real keydown/keypress) never
+# read — silently no-ops, no error. Confirm that first, then confirm
+# type-keys' trusted per-char key dispatch reaches it where type can't.
+printf "\n${BOLD}▸ type-keys${NC}\n"
+OUTPUT=$("$KHORA" type "$SESSION" "#term-input" "ignored" 2>&1)
+EC=$?
+assert_exit "type into xterm-style textarea exits 0 (silently)" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#term-result" 2>&1)
+assert_not_contains "type has no visible effect on xterm-style widget" "$OUTPUT" "typed:"
+
+# Mixed caps, space, digits, punctuation — exercises every char_key_info
+# branch (letters preserve case, space, digits, and the Unicode/punctuation
+# fallback), not just plain lowercase letters.
+OUTPUT=$("$KHORA" type-keys "$SESSION" "#term-input" "Hi there-42" 2>&1)
+EC=$?
+assert_exit "type-keys exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#term-result" 2>&1)
+assert_contains "type-keys reaches xterm-style widget with mixed chars" "$OUTPUT" "typed:Hi there-42"
+assert_contains "type-keys events are trusted" "$OUTPUT" "trusted:true"
+
+OUTPUT=$("$KHORA" type-keys "$SESSION" "nonexistent-selector" "x" 2>&1)
+EC=$?
+assert_exit "type-keys on missing selector exits nonzero" "$EC" 1
 
 # Regression for mesa task 385: trusted-input commands used to ignore
 # --timeout/KHORA_TIMEOUT entirely, inheriting chromiumoxide's hardcoded 30s

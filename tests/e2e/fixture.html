@@ -50,6 +50,13 @@
   <!-- key test: records trusted key events with modifier state -->
   <div id="key-result"></div>
 
+  <!-- type-keys test: xterm.js-style hidden textarea. Only reacts to real
+       keypress events (type-keys' trusted CDP char dispatch); `type`'s
+       JS value-assignment + input/change events have no listener here, so
+       it silently no-ops, matching the real xterm.js bug this guards. -->
+  <textarea id="term-input" style="position: absolute; left: -9999px; top: 0; width: 0; height: 0;"></textarea>
+  <div id="term-result"></div>
+
   <!-- wheel test: native scroll + scroll-chaining (overscroll-behavior:contain).
        scrollTop itself is read directly via `eval` — real scrolling needs no
        JS listener to occur, only a native-trusted wheel event to drive it. -->
@@ -173,6 +180,19 @@
         ' shift:' + e.shiftKey + ' alt:' + e.altKey +
         ' trusted:' + e.isTrusted;
     });
+
+    // type-keys test: xterm.js-style widget — only accumulates characters
+    // from real keypress events (never reads the textarea's .value), so it
+    // proves type-keys' trusted per-char dispatch where `type` would no-op.
+    (function() {
+      var term = document.getElementById('term-input');
+      var buf = '';
+      term.addEventListener('keypress', function(e) {
+        buf += e.key;
+        document.getElementById('term-result').textContent =
+          'typed:' + buf + ' trusted:' + e.isTrusted;
+      });
+    })();
 
     // Wheel test: record trusted state of the native wheel event dispatched
     // at the inner scroll container.
