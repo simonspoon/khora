@@ -484,6 +484,19 @@ assert_contains "eval arithmetic" "$OUTPUT" "4"
 OUTPUT=$("$KHORA" eval "$SESSION" "document.title" 2>&1)
 assert_contains "eval document.title" "$OUTPUT" "Khora QA Fixture"
 
+OUTPUT=$("$KHORA" eval "$SESSION" "undefined" 2>&1)
+EC=$?
+assert_exit "eval undefined exits 0" "$EC" 0
+assert_contains "eval undefined prints null" "$OUTPUT" "null"
+
+OUTPUT=$("$KHORA" eval "$SESSION" "void 0" 2>&1)
+EC=$?
+assert_exit "eval void expr exits 0" "$EC" 0
+assert_contains "eval void expr prints null" "$OUTPUT" "null"
+
+OUTPUT=$("$KHORA" eval "$SESSION" "null" 2>&1)
+assert_contains "eval null prints null" "$OUTPUT" "null"
+
 # ── screenshot ───────────────────────────────────────────
 
 printf "\n${BOLD}▸ screenshot${NC}\n"

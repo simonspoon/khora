@@ -1433,9 +1433,13 @@ impl CdpClient {
             .await
             .map_err(|e| KhoraError::JavaScriptError(e.to_string()))?;
 
-        let value = result
-            .into_value::<serde_json::Value>()
-            .map_err(|e| KhoraError::JavaScriptError(e.to_string()))?;
+        // CDP's RemoteObject omits `value` entirely for `undefined` results (no
+        // exception involved), so treat a missing value as JSON null rather than
+        // failing the command.
+        let value = match result.value() {
+            Some(v) => v.clone(),
+            None => serde_json::Value::Null,
+        };
 
         Ok(value)
     }
