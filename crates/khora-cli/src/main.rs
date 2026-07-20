@@ -174,6 +174,20 @@ enum Command {
         clear: bool,
     },
 
+    /// Blur the focused element, firing blur/focusout
+    ///
+    /// For verifying commit-on-blur and validate-on-blur fields. `key Tab`
+    /// is the usual stand-in, but it also moves focus onto the next element
+    /// in the tab order, firing unrelated handlers. Errors if the target
+    /// isn't actually focused — blurring a non-focused element dispatches
+    /// nothing, and a silent success there reads as a commit that fired.
+    Blur {
+        /// Session ID
+        session: String,
+        /// CSS selector of the element to blur (default: document.activeElement)
+        selector: Option<String>,
+    },
+
     /// Drag from one point to another with trusted mouse events (CDP Input.dispatchMouseEvent)
     Drag {
         /// Session ID
@@ -594,6 +608,22 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     "selector": selector,
                     "text": text,
                     "clear": clear,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Blur { session, selector } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            let element = client.blur(selector.as_deref()).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Blurred: {element}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "blur",
+                    "selector": selector,
+                    "element": element,
                 }))
                 .unwrap()),
             }

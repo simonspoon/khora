@@ -703,6 +703,54 @@ assert_contains "type-keys lets the subsequent blur fire" "$OUTPUT" "blur,"
 "$KHORA" key "$SESSION" "Tab" >/dev/null 2>&1
 OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
 assert_contains "type-keys then key Tab blurs the field" "$OUTPUT" "blur,"
+# ...but Tab also lands focus on the next element, firing its handlers. That
+# collateral is exactly what `blur` exists to avoid, so pin it here — the
+# assertion below is only meaningful against this one.
+assert_contains "key Tab also focuses the next element" "$OUTPUT" "next-focus,"
+
+# ── blur ─────────────────────────────────────────────────
+#
+# mesa task 465. `blur` fires blur/focusout on the focused element without
+# moving focus anywhere, so a commit-on-blur handler runs while the next
+# element in the tab order stays untouched.
+printf "\n${BOLD}▸ blur${NC}\n"
+
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+OUTPUT=$("$KHORA" blur "$SESSION" 2>&1)
+assert_contains "blur reports the element it blurred" "$OUTPUT" "input#focus-input"
+OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
+assert_contains "blur fires a real blur event" "$OUTPUT" "blur,"
+assert_not_contains "blur does not focus the next element" "$OUTPUT" "next-focus,"
+
+# An explicit selector blurs that element, provided it is the focused one.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+OUTPUT=$("$KHORA" blur "$SESSION" "#focus-input" 2>&1)
+assert_contains "blur accepts an explicit selector" "$OUTPUT" "input#focus-input"
+OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
+assert_contains "blur by selector fires a real blur event" "$OUTPUT" "blur,"
+
+# Blurring a non-focused element dispatches nothing, so it errors rather than
+# reporting a success the caller would read as "the commit fired".
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+OUTPUT=$("$KHORA" blur "$SESSION" "#focus-next" 2>&1 || true)
+assert_contains "blur errors on a non-focused element" "$OUTPUT" "nothing to blur"
+
+# Nothing focused at all is the same failure, not a silent no-op.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" blur "$SESSION" 2>&1 || true)
+assert_contains "blur errors when nothing is focused" "$OUTPUT" "no element is focused"
+
+# A selector matching nothing is an element-not-found, distinct from the above.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+OUTPUT=$("$KHORA" blur "$SESSION" "#no-such-element" 2>&1 || true)
+assert_contains "blur errors on an unmatched selector" "$OUTPUT" "element not found"
+
+OUTPUT=$("$KHORA" blur "$SESSION" --format json 2>&1 || true)
+assert_contains "blur json reports the action" "$OUTPUT" '"action": "blur"'
 
 
 # ── kill ─────────────────────────────────────────────────

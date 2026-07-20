@@ -589,6 +589,114 @@ impl CdpClient {
         Ok(())
     }
 
+    /// Blur the focused element, firing `blur`/`focusout` so commit-on-blur
+    /// and validate-on-blur handlers run.
+    ///
+    /// `selector` `None` blurs `document.activeElement`; `Some` blurs that
+    /// element. Unlike `key Tab` — the usual stand-in — this moves focus off
+    /// the field without moving it *onto* the next one, so unrelated focus
+    /// handlers downstream in the tab order don't fire.
+    ///
+    /// Errors rather than no-ops when the target isn't actually focused
+    /// (nothing focused at all, or a selector naming some other element):
+    /// `el.blur()` on a non-focused element dispatches nothing, and a silent
+    /// success there reads as "the commit fired" when it didn't.
+    ///
+    /// Carries the same document-focus caveat as [`Self::type_text`]: on a
+    /// page nothing has interacted with, the browser fires no focus events,
+    /// so there is nothing focused to blur. Establish real focus first with a
+    /// trusted input event ([`Self::click`], [`Self::key_press`],
+    /// [`Self::type_keys`]).
+    ///
+    /// Returns a short descriptor of the blurred element (`input#name`).
+    pub async fn blur(&self, selector: Option<&str>) -> KhoraResult<String> {
+        let page = self.get_or_create_page().await?;
+        // r##: the JS below contains `"#"`, which would close an r#" string.
+        let js = format!(
+            r##"
+            (() => {{
+                const describe = (el) => {{
+                    if (!el) return "null";
+                    let d = el.tagName.toLowerCase();
+                    if (el.id) d += "#" + el.id;
+                    else if (el.name) d += "[name=" + el.name + "]";
+                    else if (el.className && typeof el.className === 'string') {{
+                        const c = el.className.trim().split(/\s+/)[0];
+                        if (c) d += "." + c;
+                    }}
+                    return d;
+                }};
+                const selector = {selector};
+                const active = document.activeElement;
+                const focused = active && active !== document.body ? active : null;
+                let el = focused;
+                if (selector !== null) {{
+                    try {{
+                        el = document.querySelector(selector);
+                    }} catch (e) {{
+                        return {{ status: "bad-selector", error: e.message }};
+                    }}
+                    if (!el) return {{ status: "not-found" }};
+                    if (el !== focused) {{
+                        return {{ status: "not-focused", focused: describe(focused) }};
+                    }}
+                }} else if (!el) {{
+                    return {{ status: "nothing-focused" }};
+                }}
+                const desc = describe(el);
+                el.blur();
+                return {{ status: "ok", element: desc }};
+            }})()
+            "##,
+            selector = selector
+                .map(|s| serde_json::to_string(s).unwrap_or_default())
+                .unwrap_or_else(|| "null".to_string())
+        );
+
+        let result = page
+            .evaluate(js)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        let value = result
+            .into_value::<serde_json::Value>()
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        match value.get("status").and_then(|v| v.as_str()) {
+            Some("ok") => Ok(value
+                .get("element")
+                .and_then(|v| v.as_str())
+                .unwrap_or("element")
+                .to_string()),
+            Some("bad-selector") => {
+                let err = value
+                    .get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("invalid selector");
+                Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {:?}: {err}",
+                    selector.unwrap_or_default()
+                )))
+            }
+            Some("not-found") => Err(KhoraError::ElementNotFound(
+                selector.unwrap_or_default().to_string(),
+            )),
+            Some("not-focused") => {
+                let focused = value
+                    .get("focused")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("null");
+                Err(KhoraError::NotFocused(format!(
+                    "{} is not the focused element (focused: {focused})",
+                    selector.unwrap_or_default()
+                )))
+            }
+            _ => Err(KhoraError::NotFocused(
+                "no element is focused — click or type-keys into one first".to_string(),
+            )),
+        }
+    }
+
     /// Get text content of elements matching a CSS selector.
     pub async fn get_text(&self, selector: &str) -> KhoraResult<Vec<String>> {
         let page = self.get_or_create_page().await?;

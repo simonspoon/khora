@@ -266,14 +266,16 @@ khora type-keys "$S" ".xterm-helper-textarea" "ls -la"
 khora key "$S" "Enter"           # type-keys doesn't send control characters
 ```
 
-Verifying a field that saves on blur — type with `type-keys`, then move focus
-away and check the app actually committed:
+Verifying a field that saves on blur — type with `type-keys`, then `blur` and
+check the app actually committed:
 
 ```bash
 khora type-keys "$S" "#title" "New title" --clear
-khora key "$S" "Tab"             # or: khora eval "$S" 'document.activeElement.blur()'
+khora blur "$S"
 khora network "$S" | grep PATCH  # the commit-on-blur request should be there
 ```
+
+See [`blur`](#blur) for why that beats the older `key Tab` recipe.
 
 `type-keys` inserts at the caret rather than replacing, so typing into a field
 that already has a value appends to it — pass `--clear` to wipe the field
@@ -285,6 +287,41 @@ widgets that own their own buffer (xterm.js), which have no value to select.
 
 It doesn't handle control characters (Enter, Tab, Backspace, arrows, ...) —
 send those individually with `key`.
+
+### Blur
+
+`blur` fires `blur`/`focusout` on the focused element, which is what a
+commit-on-blur or validate-on-blur handler is waiting for:
+
+```bash
+khora blur "$S"            # blurs document.activeElement
+khora blur "$S" "#title"   # blurs that element specifically
+```
+
+The two older ways of getting there both have a catch. `khora key "$S" Tab`
+blurs the field but *also* moves focus onto the next element in the tab order,
+firing whatever handlers it owns — so a failure downstream is hard to attribute
+to the field you were testing. `khora eval "$S" 'document.activeElement.blur()'`
+avoids that but reaches past the CLI into raw JS, and silently succeeds when
+nothing was focused.
+
+`blur` errors instead of no-opping when the target isn't the focused element —
+either because nothing is focused, or because the selector names some other
+element:
+
+```
+$ khora blur "$S" "#some-other-field"
+nothing to blur: #some-other-field is not the focused element (focused: input#title)
+```
+
+That's deliberate. `el.blur()` on a non-focused element dispatches no events at
+all, so reporting success would read as "the commit fired" when nothing
+happened — the exact misdiagnosis this command exists to prevent.
+
+The same document-focus caveat as `type` applies: on a page nothing has
+interacted with, the browser dispatches no focus events, so there is nothing
+focused to blur. Establish real focus first with `click`, `key`, or `type-keys`
+(not `type` — see above).
 
 ### Scrolling
 

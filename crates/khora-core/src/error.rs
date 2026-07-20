@@ -27,6 +27,9 @@ pub enum KhoraError {
     #[error("invalid key combo: {0}")]
     InvalidKeyCombo(String),
 
+    #[error("nothing to blur: {0}")]
+    NotFocused(String),
+
     #[error("Chrome not found — install Chrome or set CHROME_PATH")]
     ChromeNotFound,
 
@@ -90,6 +93,7 @@ mod tests {
         assert_eq!(KhoraError::JavaScriptError("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::Cdp("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::InvalidKeyCombo("x".into()).exit_code(), 1);
+        assert_eq!(KhoraError::NotFocused("x".into()).exit_code(), 1);
     }
 
     #[test]

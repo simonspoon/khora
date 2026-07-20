@@ -123,6 +123,36 @@ fn test_type_keys_nonexistent_session() {
 }
 
 #[test]
+fn test_blur_help() {
+    khora()
+        .args(["blur", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Blur the focused element"))
+        .stdout(predicate::str::contains("document.activeElement"));
+}
+
+#[test]
+fn test_blur_selector_is_optional() {
+    // No selector at all still parses — it defaults to document.activeElement,
+    // so the only failure below is the missing session, not a missing arg.
+    khora()
+        .args(["blur", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_blur_nonexistent_session() {
+    khora()
+        .args(["blur", "nonexistent_xyz", "#input"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_drag_help() {
     khora()
         .args(["drag", "--help"])

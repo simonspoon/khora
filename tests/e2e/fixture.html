@@ -65,6 +65,10 @@
        correctly, which is why this misreads as an app bug. `type-keys` drives
        the real input pipeline, which does produce focus and blur. -->
   <input id="focus-input" type="text" />
+  <!-- Next in the tab order after #focus-input, so the suite can tell `blur`
+       apart from `key Tab`: both blur the field, but only Tab also focuses
+       this one and fires whatever handlers it owns. -->
+  <input id="focus-next" type="text" />
   <div id="focus-result">events:</div>
 
   <!-- wheel test: native scroll + scroll-chaining (overscroll-behavior:contain).
@@ -251,6 +255,11 @@
         el.addEventListener(t, function() {
           out.textContent += t + ',';
         });
+      });
+      // Stands in for the "unrelated handler" a Tab-as-blur fires by landing
+      // focus on the next element; `blur` must leave it silent.
+      document.getElementById('focus-next').addEventListener('focus', function() {
+        out.textContent += 'next-focus,';
       });
     })();
 
