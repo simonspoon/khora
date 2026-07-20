@@ -632,17 +632,30 @@ assert_contains "json find has bracket" "$OUTPUT" "["
 # other command routed through connect(), like `status`) hanging
 # indefinitely. connect() now bounds its handshake with
 # --timeout/KHORA_TIMEOUT, so an unreasonably short --timeout must resolve
-# fast rather than hang — `status` reports the session dead (same as any
-# other connect() failure, e.g. a truly-gone Chrome) instead of blocking.
+# fast rather than hang, instead of blocking.
 #
-# Uses 0ms rather than 1ms — see the click-at --timeout 0 comment above;
-# same race, same fix.
+# Unlike the click-at case above, the alive/dead *verdict* here is NOT
+# deterministic and must not be asserted. click-at bounds a single CDP
+# round-trip, so a 0ms timeout always elapses it. `status` calls
+# `Browser::connect()`, whose future can resolve on its first poll (the
+# websocket is driven by the spawned handler task), in which case
+# timeout(0ms) never gets to fire and `is_alive()` — a PID check, not a
+# connection check — reports alive. Measured 5 alive / 1 dead over 6 runs of
+# the same binary. What connect()'s timeout bound actually guarantees is that
+# the command *resolves* rather than hangs, so assert that and accept either
+# verdict.
 START=$(date +%s)
 OUTPUT=$("$KHORA" --timeout 0 status "$SESSION" 2>&1)
 EC=$?
 ELAPSED=$(($(date +%s) - START))
 assert_exit "status --timeout 0 exits 0" "$EC" 0
-assert_contains "status --timeout 0 reports dead (connect couldn't complete in time)" "$OUTPUT" "dead"
+if echo "$OUTPUT" | grep -qE "is (alive|dead)"; then
+  printf "  ${GREEN}PASS${NC}  status --timeout 0 returns a verdict, not a hang\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  status --timeout 0 gave no alive/dead verdict: ${OUTPUT}\n"
+  ((FAIL++))
+fi
 if [ "$ELAPSED" -lt 10 ]; then
   printf "  ${GREEN}PASS${NC}  status --timeout 0 resolved fast (${ELAPSED}s)\n"
   ((PASS++))
