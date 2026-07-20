@@ -109,7 +109,8 @@ fn test_type_keys_help() {
         .args(["type-keys", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("trusted per-character key events"));
+        .stdout(predicate::str::contains("trusted per-character key events"))
+        .stdout(predicate::str::contains("--clear"));
 }
 
 #[test]

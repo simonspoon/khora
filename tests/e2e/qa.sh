@@ -441,6 +441,30 @@ OUTPUT=$("$KHORA" type-keys "$SESSION" "nonexistent-selector" "x" 2>&1)
 EC=$?
 assert_exit "type-keys on missing selector exits nonzero" "$EC" 1
 
+# mesa task 464: text inserts at the caret, so editing a field that already
+# has a value appends to it. Confirm that, then that --clear replaces.
+"$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value = "Old"; "ok"' >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "New" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value' 2>&1)
+assert_contains "type-keys without --clear appends to the existing value" "$OUTPUT" "OldNew"
+
+"$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value = "Old"; "ok"' >/dev/null 2>&1
+OUTPUT=$("$KHORA" type-keys "$SESSION" "#focus-input" "New" --clear 2>&1)
+EC=$?
+assert_exit "type-keys --clear exits 0" "$EC" 0
+OUTPUT=$("$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value' 2>&1)
+assert_not_contains "type-keys --clear leaves none of the old value" "$OUTPUT" "Old"
+assert_contains "type-keys --clear replaces the existing value" "$OUTPUT" "New"
+
+# An already-empty field is the degenerate case: the Backspace has nothing to
+# delete and must not eat a character or fail.
+"$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value = ""; "ok"' >/dev/null 2>&1
+OUTPUT=$("$KHORA" type-keys "$SESSION" "#focus-input" "Fresh" --clear 2>&1)
+EC=$?
+assert_exit "type-keys --clear on an empty field exits 0" "$EC" 0
+OUTPUT=$("$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value' 2>&1)
+assert_contains "type-keys --clear on an empty field types the full text" "$OUTPUT" "Fresh"
+
 # Regression for mesa task 385: trusted-input commands used to ignore
 # --timeout/KHORA_TIMEOUT entirely, inheriting chromiumoxide's hardcoded 30s
 # internal request timeout instead. click-at now bounds its CDP round-trip

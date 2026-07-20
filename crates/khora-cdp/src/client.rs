@@ -435,12 +435,27 @@ impl CdpClient {
     /// Driving the browser's real input pipeline also establishes real focus,
     /// so unlike [`Self::type_text`] this produces trusted `focus`/`focusin`
     /// and lets a subsequent blur fire — required by commit-on-blur and
-    /// validate-on-blur handlers. Text is inserted at the caret (it appends
-    /// to an existing value rather than replacing it).
+    /// validate-on-blur handlers. Text is inserted at the caret, so it
+    /// appends to an existing value rather than replacing it — pass `clear`
+    /// to wipe the field first (the common case when editing an existing
+    /// value, e.g. renaming a title).
+    ///
+    /// `clear` selects the element's existing content (`select()` on form
+    /// controls, a full-contents range on contenteditable) and deletes it
+    /// with a trusted Backspace, so the same real-input path — and the
+    /// `input` events frameworks listen to — covers the clear as well as the
+    /// typing. It is a no-op on an already-empty field, and on canvas-backed
+    /// widgets with no readable value (xterm.js), which own their own buffer.
     ///
     /// Control characters (Enter, Tab, Backspace, arrows, ...) aren't
     /// handled here — send those individually with `key`.
-    pub async fn type_keys(&self, selector: &str, text: &str, timeout_ms: u64) -> KhoraResult<()> {
+    pub async fn type_keys(
+        &self,
+        selector: &str,
+        text: &str,
+        clear: bool,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
             r#"
@@ -453,6 +468,17 @@ impl CdpClient {
                 }}
                 if (!el) return {{ found: false }};
                 el.focus();
+                if ({clear}) {{
+                    if (typeof el.select === 'function') {{
+                        el.select();
+                    }} else if (el.isContentEditable) {{
+                        const range = document.createRange();
+                        range.selectNodeContents(el);
+                        const sel = window.getSelection();
+                        sel.removeAllRanges();
+                        sel.addRange(range);
+                    }}
+                }}
                 return {{ found: true }};
             }})()
             "#,
@@ -475,6 +501,39 @@ impl CdpClient {
                 )));
             }
             return Err(KhoraError::ElementNotFound(selector.to_string()));
+        }
+
+        if clear {
+            let builder = DispatchKeyEventParams::builder()
+                .code("Backspace")
+                .key("Backspace")
+                .windows_virtual_key_code(8)
+                .native_virtual_key_code(8);
+
+            let down = builder
+                .clone()
+                .r#type(DispatchKeyEventType::RawKeyDown)
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                page.execute(down),
+            )
+            .await
+            .map_err(|_| KhoraError::Timeout(timeout_ms))?
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+            let up = builder
+                .r#type(DispatchKeyEventType::KeyUp)
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            tokio::time::timeout(
+                std::time::Duration::from_millis(timeout_ms),
+                page.execute(up),
+            )
+            .await
+            .map_err(|_| KhoraError::Timeout(timeout_ms))?
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
         }
 
         for c in text.chars() {

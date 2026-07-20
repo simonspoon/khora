@@ -270,15 +270,21 @@ Verifying a field that saves on blur — type with `type-keys`, then move focus
 away and check the app actually committed:
 
 ```bash
-khora type-keys "$S" "#title" "New title"
+khora type-keys "$S" "#title" "New title" --clear
 khora key "$S" "Tab"             # or: khora eval "$S" 'document.activeElement.blur()'
 khora network "$S" | grep PATCH  # the commit-on-blur request should be there
 ```
 
-`type-keys` appends at the caret rather than replacing, and doesn't handle
-control characters (Enter, Tab, Backspace, arrows, ...) — send those
-individually with `key`, and clear an existing value first if you need a
-replacement rather than an append.
+`type-keys` inserts at the caret rather than replacing, so typing into a field
+that already has a value appends to it — pass `--clear` to wipe the field
+first, which is what you want when editing an existing value (renaming a
+title, correcting a form). `--clear` selects the current content and deletes it
+with a trusted Backspace, so the clear goes through the same real-input path as
+the typing; it is a no-op on an already-empty field, and on canvas-backed
+widgets that own their own buffer (xterm.js), which have no value to select.
+
+It doesn't handle control characters (Enter, Tab, Backspace, arrows, ...) —
+send those individually with `key`.
 
 ### Scrolling
 

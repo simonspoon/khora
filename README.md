@@ -74,7 +74,7 @@ khora launch --window-size 1366x768
 | `find <session> <selector>` | Find elements by CSS selector |
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |
-| `type-keys <session> <selector> <text>` | Type text with trusted per-character key events — for xterm.js-style widgets `type` can't reach, and for anything gated on focus/blur (`type` fires no focus events, so commit-on-blur never runs) |
+| `type-keys <session> <selector> <text>` | Type text with trusted per-character key events — for xterm.js-style widgets `type` can't reach, and for anything gated on focus/blur (`type` fires no focus events, so commit-on-blur never runs). Inserts at the caret; `--clear` wipes the field first |
 | `drag <session> <from> <to>` | Drag with trusted mouse events between `X,Y` points (`--steps`, `--delay` ms) |
 | `mouse-down <session> <at>` | Press the left mouse button at `X,Y` without releasing it |
 | `mouse-move <session> <at>` | Move the mouse to `X,Y`, carrying over button state |

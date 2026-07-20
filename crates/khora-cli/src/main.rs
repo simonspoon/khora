@@ -168,6 +168,10 @@ enum Command {
         selector: String,
         /// Text to type
         text: String,
+        /// Clear the field before typing (text inserts at the caret, so an
+        /// existing value is appended to otherwise)
+        #[arg(long)]
+        clear: bool,
     },
 
     /// Drag from one point to another with trusted mouse events (CDP Input.dispatchMouseEvent)
@@ -568,17 +572,28 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             session,
             selector,
             text,
+            clear,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            client.type_keys(selector, text, cli.timeout).await?;
+            client
+                .type_keys(selector, text, *clear, cli.timeout)
+                .await?;
 
             match cli.format {
-                OutputFormat::Text => Ok(format!("Typed \"{text}\" into {selector} (real keys)")),
+                OutputFormat::Text => {
+                    let how = if *clear {
+                        "real keys, cleared first"
+                    } else {
+                        "real keys"
+                    };
+                    Ok(format!("Typed \"{text}\" into {selector} ({how})"))
+                }
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "type-keys",
                     "selector": selector,
                     "text": text,
+                    "clear": clear,
                 }))
                 .unwrap()),
             }
