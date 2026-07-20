@@ -632,6 +632,55 @@ fi
 OUTPUT=$("$KHORA" status "$SESSION" 2>&1)
 assert_contains "session still alive after connect timeout" "$OUTPUT" "alive"
 
+# ── type vs type-keys: focus and blur events ─────────────
+#
+# Regression for mesa task 450. A page the user has never interacted with has
+# `document.hasFocus() === false`, and in that state the JS `el.focus()` that
+# `type` performs moves `activeElement` WITHOUT the browser dispatching a
+# focus event — so a later `blur()` dispatches nothing either, and anything
+# gated on focus/blur (commit-on-blur, validate-on-blur) silently never runs.
+# The DOM value and any framework state derived from it still read back
+# correctly, so it presents as an app bug; that cost several turns to rule
+# out during mesa task 448's QA.
+#
+# The trap is that this is *stateful*, which is what makes it so confusing:
+# any trusted input event (a click, a key, a type-keys) gives the document
+# focus, after which `type` DOES fire focus/blur — so the same `type` call
+# works or silently doesn't depending on what the session happened to do
+# earlier. `navigate` resets `hasFocus` to false, which is what makes the
+# no-focus arm below deterministic rather than order-dependent.
+#
+# `type-keys` drives the real input pipeline, which establishes real focus
+# itself, so it fires focus and allows the subsequent blur in either state.
+printf "\n${BOLD}▸ type vs type-keys focus/blur${NC}\n"
+
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" "document.hasFocus()" 2>&1)
+assert_contains "fresh navigate leaves document unfocused" "$OUTPUT" "false"
+
+"$KHORA" type "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+"$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").blur(); "ok"' >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
+assert_not_contains "type on an unfocused document fires no focus event" "$OUTPUT" "focus,"
+assert_not_contains "type on an unfocused document leaves blur unfired" "$OUTPUT" "blur,"
+
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+"$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").blur(); "ok"' >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
+assert_contains "type-keys fires a real focus event regardless" "$OUTPUT" "focus,"
+assert_contains "type-keys lets the subsequent blur fire" "$OUTPUT" "blur,"
+
+# The blur above is driven by an explicit eval. docs/usage.md and the khora
+# skill instead prescribe `key Tab` as the blur step for verifying a
+# commit-on-blur field, since that's what a user actually does — so exercise
+# that exact recipe rather than only the eval form.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+"$KHORA" type-keys "$SESSION" "#focus-input" "abc" >/dev/null 2>&1
+"$KHORA" key "$SESSION" "Tab" >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#focus-result" 2>&1)
+assert_contains "type-keys then key Tab blurs the field" "$OUTPUT" "blur,"
+
+
 # ── kill ─────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ kill${NC}\n"

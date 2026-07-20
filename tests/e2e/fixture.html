@@ -57,6 +57,16 @@
   <textarea id="term-input" style="position: absolute; left: -9999px; top: 0; width: 0; height: 0;"></textarea>
   <div id="term-result"></div>
 
+  <!-- focus/blur test: `document.hasFocus()` is false in headless Chrome, so
+       the JS `el.focus()` that `type` performs moves `activeElement` without
+       the browser dispatching any focus event — and a later `blur()` then
+       dispatches nothing either. Commit-on-blur / validate-on-blur handlers
+       never run, while the DOM value (and even React state) reads back
+       correctly, which is why this misreads as an app bug. `type-keys` drives
+       the real input pipeline, which does produce focus and blur. -->
+  <input id="focus-input" type="text" />
+  <div id="focus-result">events:</div>
+
   <!-- wheel test: native scroll + scroll-chaining (overscroll-behavior:contain).
        scrollTop itself is read directly via `eval` — real scrolling needs no
        JS listener to occur, only a native-trusted wheel event to drive it. -->
@@ -228,6 +238,19 @@
           document.getElementById('react-input-result').textContent =
             'onchange:' + onChangeCount + ' value:' + current;
         }
+      });
+    })();
+
+    // Focus/blur tracking: records every focus and blur the browser actually
+    // dispatches, so the e2e suite can assert that `type` produces none of
+    // them while `type-keys` produces both.
+    (function() {
+      var el = document.getElementById('focus-input');
+      var out = document.getElementById('focus-result');
+      ['focus', 'blur'].forEach(function(t) {
+        el.addEventListener(t, function() {
+          out.textContent += t + ',';
+        });
       });
     })();
 

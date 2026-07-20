@@ -357,6 +357,17 @@ impl CdpClient {
     /// (xterm.js and similar terminal emulators) — no error, no visible
     /// effect, since the `input`/`change` events dispatched here have no
     /// listener. Use [`Self::type_keys`] for those.
+    ///
+    /// On a page nothing has interacted with yet — `document.hasFocus()`
+    /// false — it also dispatches **no focus events**: the `el.focus()`
+    /// below moves `activeElement` without the browser firing
+    /// `focus`/`focusin`, so a later `blur()` fires nothing either. Anything
+    /// gated on focus/blur (commit-on-blur, validate-on-blur) never runs even
+    /// though the value, and any framework state derived from it, reads back
+    /// correctly. This is stateful: any trusted input event (`click`, `key`,
+    /// `type_keys`) focuses the document, after which this method does fire
+    /// focus/blur, while a `navigate` resets it. Use [`Self::type_keys`] when
+    /// focus/blur behavior matters.
     pub async fn type_text(&self, selector: &str, text: &str) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         let js = format!(
@@ -420,6 +431,12 @@ impl CdpClient {
     /// dispatches the same trusted keydown/keypress/keyup sequence a real
     /// keyboard produces, which any keydown/keypress listener, including
     /// xterm.js's, picks up.
+    ///
+    /// Driving the browser's real input pipeline also establishes real focus,
+    /// so unlike [`Self::type_text`] this produces trusted `focus`/`focusin`
+    /// and lets a subsequent blur fire — required by commit-on-blur and
+    /// validate-on-blur handlers. Text is inserted at the caret (it appends
+    /// to an existing value rather than replacing it).
     ///
     /// Control characters (Enter, Tab, Backspace, arrows, ...) aren't
     /// handled here — send those individually with `key`.

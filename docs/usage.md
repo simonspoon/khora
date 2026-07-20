@@ -211,25 +211,74 @@ khora key "$S" "Cmd+Shift+D"     # app-defined shortcut
 khora key "$S" "Escape"          # no modifier — just the key, e.g. dismiss a modal
 ```
 
-### Canvas-rendered inputs (xterm.js and similar)
+### When `type` isn't enough — `type-keys`
 
 `type` sets the target element's `.value` via its native setter and fires
-`input`/`change` — that only reaches elements backed by real form-control
-state that something is listening to. Canvas/WebGL-rendered widgets that
+`input`/`change`. That covers ordinary form fields, including
+React-controlled inputs (the native setter defeats React's value tracker, so
+`onChange` does fire). It does **not** reproduce a real keystroke, and two
+classes of target need one:
+
+**1. Widgets that never read `.value`.** Canvas/WebGL-rendered widgets that
 manage their own key handling off a hidden textarea (xterm.js and similar
-terminal emulators) never read `.value`: `type` silently no-ops on them — no
-error, no visible effect. `type-keys` dispatches the same trusted
-keydown/keypress/keyup sequence a real keyboard produces (CDP
-`Input.dispatchKeyEvent`, one rawKeyDown + char + keyUp per character), which
-any keydown/keypress listener, including xterm.js's, picks up.
+terminal emulators) don't look at `.value` at all: `type` silently no-ops on
+them — no error, no visible effect.
+
+**2. Anything gated on focus or blur.** On a page nothing has interacted with
+yet, `document.hasFocus()` is false — and in that state the JS `el.focus()`
+that `type` performs moves `activeElement` **without the browser dispatching
+a focus event**, so a later `blur()` dispatches nothing either. A
+commit-on-blur or validate-on-blur handler never runs: the edit is never
+saved and no request goes out. This one is nasty to diagnose, because the DOM
+`.value` and the framework's own state both read back *correctly* — it looks
+like an application bug rather than a harness artifact.
+
+Worse, it's **stateful**. Any trusted input event — a `click`, a `key`, a
+`type-keys` — gives the document focus, and from then on `type` *does* fire
+focus/blur. So the identical `type` call works or silently doesn't depending
+on what the session happened to do earlier. `navigate` resets `hasFocus` to
+false again.
+
+```
+# fresh page (document.hasFocus() === false)
+khora type      → ["input", "change"]                       (synthetic only)
+
+# same call, after any trusted click/key
+khora type      → ["focus", "focusin", "input", "change",
+                   "blur", "focusout"]
+
+# type-keys, either way
+khora type-keys → ["focus", "focusin", "keydown", "input",
+                   ..., "blur", "focusout"]                 (all trusted)
+```
+
+If a field's save-on-blur seems broken, check `khora eval "$S"
+'document.hasFocus()'` before concluding it's the app.
+
+`type-keys` dispatches the same trusted keydown/keypress/keyup sequence a real
+keyboard produces (CDP `Input.dispatchKeyEvent`, one rawKeyDown + char + keyUp
+per character), driving the browser's real input pipeline — which establishes
+real focus, so both the keystrokes and a subsequent blur behave as they would
+for a user.
 
 ```bash
 khora type-keys "$S" ".xterm-helper-textarea" "ls -la"
 khora key "$S" "Enter"           # type-keys doesn't send control characters
 ```
 
-`type-keys` doesn't handle control characters (Enter, Tab, Backspace,
-arrows, ...) — send those individually with `key`.
+Verifying a field that saves on blur — type with `type-keys`, then move focus
+away and check the app actually committed:
+
+```bash
+khora type-keys "$S" "#title" "New title"
+khora key "$S" "Tab"             # or: khora eval "$S" 'document.activeElement.blur()'
+khora network "$S" | grep PATCH  # the commit-on-blur request should be there
+```
+
+`type-keys` appends at the caret rather than replacing, and doesn't handle
+control characters (Enter, Tab, Backspace, arrows, ...) — send those
+individually with `key`, and clear an existing value first if you need a
+replacement rather than an append.
 
 ### Scrolling
 
