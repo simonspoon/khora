@@ -371,7 +371,8 @@ fn test_screenshot_help() {
         .stdout(predicate::str::contains("screenshot"))
         .stdout(predicate::str::contains("--selector"))
         .stdout(predicate::str::contains("--full-page"))
-        .stdout(predicate::str::contains("--viewport"));
+        .stdout(predicate::str::contains("--viewport"))
+        .stdout(predicate::str::contains("--clip"));
 }
 
 #[test]
@@ -381,6 +382,31 @@ fn test_screenshot_full_page_and_viewport_conflict() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_screenshot_clip_and_selector_conflict() {
+    khora()
+        .args([
+            "screenshot",
+            "abc123",
+            "--clip",
+            "0,0,100x100",
+            "--selector",
+            "body",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_screenshot_rejects_malformed_clip() {
+    khora()
+        .args(["screenshot", "abc123", "--clip", "0,0,1920"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y,WxH"));
 }
 
 #[test]

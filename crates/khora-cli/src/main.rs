@@ -60,6 +60,53 @@ impl std::fmt::Display for Point {
     }
 }
 
+/// A screenshot clip region in page CSS pixels: `X,Y,WxH`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ClipRect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl std::str::FromStr for ClipRect {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let bad = || format!("expected X,Y,WxH (e.g. 0,0,1920x2500), got: {s}");
+        let (x, rest) = s.split_once(',').ok_or_else(bad)?;
+        let (y, size) = rest.split_once(',').ok_or_else(bad)?;
+        let (w, h) = size.split_once('x').ok_or_else(bad)?;
+        let x: f64 = x.trim().parse().map_err(|_| format!("invalid x: {x}"))?;
+        let y: f64 = y.trim().parse().map_err(|_| format!("invalid y: {y}"))?;
+        let width: f64 = w
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid width: {w}"))?;
+        let height: f64 = h
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid height: {h}"))?;
+        if !x.is_finite() || !y.is_finite() {
+            return Err(format!("coordinates must be finite, got: {s}"));
+        }
+        if !(width.is_finite() && height.is_finite()) || width <= 0.0 || height <= 0.0 {
+            return Err(format!("dimensions must be > 0, got: {width}x{height}"));
+        }
+        Ok(ClipRect {
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+}
+
+impl std::fmt::Display for ClipRect {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{},{},{}x{}", self.x, self.y, self.width, self.height)
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "khora",
@@ -301,6 +348,11 @@ enum Command {
         /// CSS selector to crop the shot to; errors if it matches nothing
         #[arg(long, short)]
         selector: Option<String>,
+        /// Capture an explicit page region as X,Y,WxH in CSS pixels
+        /// (e.g. 0,0,1920x2500) — reaches content the document content size
+        /// does not cover, such as a tall fixed overlay on a non-scrolling page
+        #[arg(long, conflicts_with_all = ["selector", "viewport", "full_page"])]
+        clip: Option<ClipRect>,
         /// Capture the whole scrollable page (the default)
         #[arg(long, conflicts_with_all = ["viewport", "selector"])]
         full_page: bool,
@@ -773,13 +825,17 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             session,
             output,
             selector,
+            clip,
             full_page: _,
             viewport,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
             // --full-page names the default, so only --viewport changes anything.
-            let png_bytes = client.screenshot(selector.as_deref(), !viewport).await?;
+            let clip = clip.map(|c| (c.x, c.y, c.width, c.height));
+            let png_bytes = client
+                .screenshot(selector.as_deref(), clip, !viewport)
+                .await?;
 
             let path = PathBuf::from(output.as_deref().unwrap_or("khora-screenshot.png"));
             std::fs::write(&path, &png_bytes)?;
@@ -1211,6 +1267,58 @@ mod tests {
     fn display_point_round_trip() {
         let p = Point { x: 100.0, y: 250.5 };
         assert_eq!(Point::from_str(&p.to_string()).unwrap(), p);
+    }
+
+    #[test]
+    fn parse_clip_rect_valid() {
+        assert_eq!(
+            ClipRect::from_str("0,0,1920x2500").unwrap(),
+            ClipRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 2500.0
+            }
+        );
+        assert_eq!(
+            ClipRect::from_str("10.5, -20, 300.25x400").unwrap(),
+            ClipRect {
+                x: 10.5,
+                y: -20.0,
+                width: 300.25,
+                height: 400.0
+            }
+        );
+    }
+
+    #[test]
+    fn parse_clip_rect_rejects_bad_input() {
+        assert!(ClipRect::from_str("").is_err());
+        assert!(ClipRect::from_str("0,0").is_err());
+        assert!(ClipRect::from_str("0,0,1920").is_err());
+        assert!(ClipRect::from_str("0,0,1920,2500").is_err());
+        assert!(ClipRect::from_str("a,0,1920x2500").is_err());
+        assert!(ClipRect::from_str("0,a,1920x2500").is_err());
+        assert!(ClipRect::from_str("0,0,ax2500").is_err());
+        assert!(ClipRect::from_str("0,0,1920xa").is_err());
+        // A zero or negative region has no pixels to capture.
+        assert!(ClipRect::from_str("0,0,0x2500").is_err());
+        assert!(ClipRect::from_str("0,0,1920x-1").is_err());
+        assert!(ClipRect::from_str("inf,0,1920x2500").is_err());
+        assert!(ClipRect::from_str("0,0,infx2500").is_err());
+        assert!(ClipRect::from_str("NaN,0,1920x2500").is_err());
+    }
+
+    #[test]
+    fn display_clip_rect_round_trip() {
+        let c = ClipRect {
+            x: 10.5,
+            y: -20.0,
+            width: 300.25,
+            height: 400.0,
+        };
+        assert_eq!(c.to_string(), "10.5,-20,300.25x400");
+        assert_eq!(ClipRect::from_str(&c.to_string()).unwrap(), c);
     }
 
     #[test]

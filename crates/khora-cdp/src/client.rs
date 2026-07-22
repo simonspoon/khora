@@ -891,11 +891,16 @@ impl CdpClient {
     /// A `selector` scrolls the first matching element into view and crops the
     /// shot to its bounding box; returns [`KhoraError::ElementNotFound`] if
     /// nothing matches or the element has no visible area, rather than falling
-    /// back to a whole-page shot. With no `selector`, `full_page` chooses
-    /// between the whole scrollable document and the visible viewport.
+    /// back to a whole-page shot. A `clip` of `(x, y, width, height)` in page
+    /// CSS pixels captures that region verbatim — including area the document
+    /// content size does not cover, which is the only way to reach a tall
+    /// `position: fixed` overlay on a document that does not scroll. With
+    /// neither, `full_page` chooses between the whole scrollable document and
+    /// the visible viewport.
     pub async fn screenshot(
         &self,
         selector: Option<&str>,
+        clip: Option<(f64, f64, f64, f64)>,
         full_page: bool,
     ) -> KhoraResult<Vec<u8>> {
         let page = self.get_or_create_page().await?;
@@ -903,14 +908,23 @@ impl CdpClient {
         // capture_beyond_viewport renders the whole clip even when it is
         // taller/wider than the viewport; without it CDP only paints the
         // viewport-visible part and the rest comes out blank.
-        builder = match (selector, full_page) {
-            (Some(sel), _) => builder
+        builder = match (selector, clip, full_page) {
+            (Some(sel), _, _) => builder
                 .clip(self.element_clip(&page, sel).await?)
                 .capture_beyond_viewport(true),
-            (None, true) => builder
+            (None, Some((x, y, width, height)), _) => builder
+                .clip(Viewport {
+                    x,
+                    y,
+                    width,
+                    height,
+                    scale: 1.0,
+                })
+                .capture_beyond_viewport(true),
+            (None, None, true) => builder
                 .clip(self.page_clip(&page).await?)
                 .capture_beyond_viewport(true),
-            (None, false) => builder,
+            (None, None, false) => builder,
         };
         let png = page
             .screenshot(builder.build())

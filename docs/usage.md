@@ -363,7 +363,21 @@ they have on screen, anchored to the top of the shot.
 
 Content that overflows a viewport-sized document — a tall `position: fixed`
 overlay on a page pinned to `height: 100vh` — is *not* part of that content size
-and gets cut off. Crop to the overlay with `--selector` to capture it whole.
+and gets cut off. Crop to the overlay with `--selector` to capture it whole, or
+name the region directly with `--clip X,Y,WxH` when no single element wraps it:
+
+```bash
+khora screenshot "$S" -o overlay.png --clip 0,0,1920x2500
+```
+
+`--clip` takes page CSS pixels (the same coordinate space as `window.scrollX +
+getBoundingClientRect()`) and captures exactly that rectangle, whatever the
+document content size says. Measure the region first when you don't know it:
+
+```bash
+khora eval "$S" "var r=document.querySelector('.drawer').getBoundingClientRect(); \
+  [r.x+scrollX, r.y+scrollY, r.width, r.height].join()"
+```
 
 Pass `--selector` to crop the shot to a single element's bounding box instead of
 the page. The element is scrolled into view first, and the crop covers its full

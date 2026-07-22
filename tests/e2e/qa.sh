@@ -585,10 +585,41 @@ else
 fi
 "$KHORA" eval "$SESSION" "document.getElementById('tall-spacer').remove()" >/dev/null 2>&1
 
+# --clip reaches past the document content size. A `position: fixed` overlay on
+# a non-scrolling document contributes nothing to content size, so --full-page
+# (which clips to it) cuts the overlay off; --clip names the region directly.
+"$KHORA" eval "$SESSION" \
+  "document.body.style.overflow='hidden'; document.body.insertAdjacentHTML('beforeend', '<div id=\"tall-fixed\" style=\"position:fixed;left:0;top:0;width:400px;height:2500px;background:linear-gradient(#08f,#f80)\"></div>')" \
+  >/dev/null 2>&1
+rm -f "$SCREENSHOT"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" --full-page 2>&1)
+assert_not_contains "--full-page cannot reach a fixed overlay" \
+  "$(file "$SCREENSHOT")" "x 2500"
+rm -f "$SCREENSHOT"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" --clip 0,0,400x2500 2>&1)
+EC=$?
+assert_exit "screenshot --clip exits 0" "$EC" 0
+assert_contains "--clip captures the full 400x2500 region" \
+  "$(file "$SCREENSHOT")" "400 x 2500"
+"$KHORA" eval "$SESSION" \
+  "document.getElementById('tall-fixed').remove(); document.body.style.overflow=''" \
+  >/dev/null 2>&1
+
+# --clip rejects a malformed region before touching Chrome
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o /tmp/khora-qa-badclip-$$.png --clip 0,0,1920 2>&1)
+EC=$?
+assert_exit "screenshot --clip malformed rejected" "$EC" 2
+assert_contains "screenshot --clip malformed message" "$OUTPUT" "X,Y,WxH"
+
 # --full-page and --viewport are mutually exclusive
 OUTPUT=$("$KHORA" screenshot "$SESSION" -o /tmp/khora-qa-conflict-$$.png --full-page --viewport 2>&1)
 EC=$?
 assert_exit "screenshot --full-page --viewport conflicts" "$EC" 2
+
+# --clip and --selector are mutually exclusive
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o /tmp/khora-qa-conflict-$$.png --clip 0,0,10x10 --selector "#heading" 2>&1)
+EC=$?
+assert_exit "screenshot --clip --selector conflicts" "$EC" 2
 
 # ── wait-for ─────────────────────────────────────────────
 

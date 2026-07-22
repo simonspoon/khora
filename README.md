@@ -48,6 +48,9 @@ khora screenshot abc123 -o fold.png --viewport
 # Screenshot cropped to an element (errors if the selector matches nothing)
 khora screenshot abc123 -o button.png --selector "#submit"
 
+# Screenshot of an explicit page region, X,Y,WxH in CSS pixels
+khora screenshot abc123 -o overlay.png --clip 0,0,1920x2500
+
 # Execute JavaScript
 khora eval abc123 "document.title"
 
@@ -87,7 +90,7 @@ khora launch --window-size 1366x768
 | `dblclick-at <session> <at>` | Double-click at raw viewport point `X,Y` with trusted mouse events |
 | `key <session> <combo>` | Press a trusted key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape` |
 | `wheel <session> <at> <delta>` | Scroll with a trusted native wheel event at `X,Y` by `dX,dY` CSS pixels |
-| `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element |
+| `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element, `--clip X,Y,WxH` for an explicit region |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |
 | `wait-for <session> <selector>` | Wait for element to appear |
