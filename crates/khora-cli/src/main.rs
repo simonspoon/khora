@@ -301,6 +301,12 @@ enum Command {
         /// CSS selector to crop the shot to; errors if it matches nothing
         #[arg(long, short)]
         selector: Option<String>,
+        /// Capture the whole scrollable page (the default)
+        #[arg(long, conflicts_with_all = ["viewport", "selector"])]
+        full_page: bool,
+        /// Capture only the visible viewport instead of the whole page
+        #[arg(long, conflicts_with = "selector")]
+        viewport: bool,
     },
 
     /// Get text content of matching elements
@@ -767,10 +773,13 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             session,
             output,
             selector,
+            full_page: _,
+            viewport,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            let png_bytes = client.screenshot(selector.as_deref()).await?;
+            // --full-page names the default, so only --viewport changes anything.
+            let png_bytes = client.screenshot(selector.as_deref(), !viewport).await?;
 
             let path = PathBuf::from(output.as_deref().unwrap_or("khora-screenshot.png"));
             std::fs::write(&path, &png_bytes)?;

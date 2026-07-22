@@ -39,8 +39,11 @@ khora text abc123 "h1"
 khora attribute abc123 "a" "href"
 khora wait-for abc123 ".success-message"
 
-# Screenshot (full page)
+# Screenshot (whole scrollable page)
 khora screenshot abc123 -o result.png
+
+# Screenshot of just the visible viewport
+khora screenshot abc123 -o fold.png --viewport
 
 # Screenshot cropped to an element (errors if the selector matches nothing)
 khora screenshot abc123 -o button.png --selector "#submit"
@@ -84,7 +87,7 @@ khora launch --window-size 1366x768
 | `dblclick-at <session> <at>` | Double-click at raw viewport point `X,Y` with trusted mouse events |
 | `key <session> <combo>` | Press a trusted key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape` |
 | `wheel <session> <at> <delta>` | Scroll with a trusted native wheel event at `X,Y` by `dX,dY` CSS pixels |
-| `screenshot <session>` | Capture screenshot (full page, or `--selector` to crop to an element) |
+| `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |
 | `wait-for <session> <selector>` | Wait for element to appear |

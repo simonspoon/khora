@@ -888,27 +888,63 @@ impl CdpClient {
 
     /// Capture a screenshot, returned as PNG bytes.
     ///
-    /// With no `selector`, captures the full page. With a `selector`, scrolls
-    /// the first matching element into view and crops the shot to its bounding
-    /// box; returns [`KhoraError::ElementNotFound`] if nothing matches or the
-    /// element has no visible area, rather than falling back to a full-page shot.
-    pub async fn screenshot(&self, selector: Option<&str>) -> KhoraResult<Vec<u8>> {
+    /// A `selector` scrolls the first matching element into view and crops the
+    /// shot to its bounding box; returns [`KhoraError::ElementNotFound`] if
+    /// nothing matches or the element has no visible area, rather than falling
+    /// back to a whole-page shot. With no `selector`, `full_page` chooses
+    /// between the whole scrollable document and the visible viewport.
+    pub async fn screenshot(
+        &self,
+        selector: Option<&str>,
+        full_page: bool,
+    ) -> KhoraResult<Vec<u8>> {
         let page = self.get_or_create_page().await?;
         let mut builder = ScreenshotParams::builder().format(CaptureScreenshotFormat::Png);
-        builder = match selector {
-            // capture_beyond_viewport renders the whole clip even when the
-            // element is taller/wider than the viewport; without it CDP only
-            // paints the viewport-visible part and the rest comes out blank.
-            Some(sel) => builder
+        // capture_beyond_viewport renders the whole clip even when it is
+        // taller/wider than the viewport; without it CDP only paints the
+        // viewport-visible part and the rest comes out blank.
+        builder = match (selector, full_page) {
+            (Some(sel), _) => builder
                 .clip(self.element_clip(&page, sel).await?)
                 .capture_beyond_viewport(true),
-            None => builder.full_page(true),
+            (None, true) => builder
+                .clip(self.page_clip(&page).await?)
+                .capture_beyond_viewport(true),
+            (None, false) => builder,
         };
         let png = page
             .screenshot(builder.build())
             .await
             .map_err(|e| KhoraError::ScreenshotFailed(e.to_string()))?;
         Ok(png)
+    }
+
+    /// Clip rectangle covering the whole scrollable document.
+    ///
+    /// Deliberately *not* chromiumoxide's `ScreenshotParams::full_page`, which
+    /// implements whole-page capture as
+    /// `Emulation.setDeviceMetricsOverride(width, contentHeight)` → capture →
+    /// `clearDeviceMetricsOverride`. That has two visible defects: resizing the
+    /// viewport to the content height reflows the page, so `position: fixed`,
+    /// `sticky` and `vh`-sized layout render at sizes the user never sees (a
+    /// `inset: 40px` modal 857px tall on screen came out 2920px tall); and the
+    /// trailing *clear* wipes any override a previous `set-viewport` installed,
+    /// silently resetting the session's viewport as a side effect of taking a
+    /// picture. Sizing a clip from `Page.getLayoutMetrics` instead touches no
+    /// emulation state and leaves layout alone.
+    async fn page_clip(&self, page: &Page) -> KhoraResult<Viewport> {
+        let metrics = page
+            .layout_metrics()
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let content = metrics.css_content_size;
+        Ok(Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: content.width,
+            height: content.height,
+            scale: 1.0,
+        })
     }
 
     /// Resolve a selector to a screenshot clip rectangle in page coordinates.

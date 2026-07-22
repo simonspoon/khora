@@ -346,13 +346,34 @@ khora screenshot "$S" -o before.png
 khora screenshot "$S" -o after.png
 ```
 
+Shots cover the whole scrollable page by default, however far it extends below
+the fold. `--full-page` names that default explicitly; `--viewport` opts out and
+captures only the visible area.
+
+```bash
+khora screenshot "$S" -o whole-page.png --full-page   # same as no flag
+khora screenshot "$S" -o above-the-fold.png --viewport
+```
+
+Whole-page capture clips to the document's content size and renders beyond the
+viewport in place (CDP `captureBeyondViewport`), so it neither reflows the page
+nor disturbs a viewport set earlier by [`set-viewport`](#phone-width-viewports).
+`position: fixed`, `sticky` and `vh`-sized elements therefore appear at the size
+they have on screen, anchored to the top of the shot.
+
+Content that overflows a viewport-sized document — a tall `position: fixed`
+overlay on a page pinned to `height: 100vh` — is *not* part of that content size
+and gets cut off. Crop to the overlay with `--selector` to capture it whole.
+
 Pass `--selector` to crop the shot to a single element's bounding box instead of
-the full page. The element is scrolled into view first. If the selector matches
+the page. The element is scrolled into view first, and the crop covers its full
+bounding box even when that is taller than the viewport. If the selector matches
 nothing (or the element has no visible area) the command errors with exit code 1
-rather than silently falling back to a full-page shot.
+rather than silently falling back to a whole-page shot.
 
 ```bash
 khora screenshot "$S" -o submit-button.png --selector "#submit"
+khora screenshot "$S" -o tall-modal.png --selector "[role=dialog]"
 ```
 
 ### JavaScript evaluation

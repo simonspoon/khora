@@ -561,6 +561,35 @@ EC=$?
 assert_exit "screenshot --selector missing errors" "$EC" 1
 assert_contains "screenshot --selector missing message" "$OUTPUT" "element not found"
 
+# --full-page vs --viewport. The fixture is exactly viewport-height, so grow it
+# past the fold for this check and shrink it back, leaving later cases alone.
+"$KHORA" eval "$SESSION" \
+  "document.body.insertAdjacentHTML('beforeend', '<div id=\"tall-spacer\" style=\"height:3000px\"></div>')" \
+  >/dev/null 2>&1
+rm -f "$SCREENSHOT"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" --full-page 2>&1)
+EC=$?
+assert_exit "screenshot --full-page exits 0" "$EC" 0
+TALL_SIZE=$(wc -c <"$SCREENSHOT")
+rm -f "$SCREENSHOT"
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" --viewport 2>&1)
+EC=$?
+assert_exit "screenshot --viewport exits 0" "$EC" 0
+VIEW_SIZE=$(wc -c <"$SCREENSHOT")
+if [ "$VIEW_SIZE" -lt "$TALL_SIZE" ]; then
+  printf "  ${GREEN}PASS${NC}  --viewport shot smaller than --full-page shot\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  --viewport shot not smaller than --full-page shot\n"
+  ((FAIL++))
+fi
+"$KHORA" eval "$SESSION" "document.getElementById('tall-spacer').remove()" >/dev/null 2>&1
+
+# --full-page and --viewport are mutually exclusive
+OUTPUT=$("$KHORA" screenshot "$SESSION" -o /tmp/khora-qa-conflict-$$.png --full-page --viewport 2>&1)
+EC=$?
+assert_exit "screenshot --full-page --viewport conflicts" "$EC" 2
+
 # ── wait-for ─────────────────────────────────────────────
 
 printf "\n${BOLD}▸ wait-for${NC}\n"
@@ -611,6 +640,13 @@ assert_contains "viewport width applied (below headless ~500px clamp)" "$OUTPUT"
 "$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
 OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
 assert_contains "viewport persists across navigate" "$OUTPUT" "390"
+
+# Regression: a full-page screenshot used to be implemented as
+# setDeviceMetricsOverride -> capture -> clearDeviceMetricsOverride, so taking
+# one silently reset the override installed here.
+"$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
+assert_contains "viewport survives a screenshot" "$OUTPUT" "390"
 
 # ── JSON output format ──────────────────────────────────
 
