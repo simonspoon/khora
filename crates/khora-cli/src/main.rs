@@ -173,6 +173,34 @@ enum Command {
         mobile: bool,
     },
 
+    /// Emulate CSS media features (CDP Emulation.setEmulatedMedia)
+    ///
+    /// Overrides stick to the session and are re-applied on every later
+    /// command, because Chrome drops media emulation when the CDP client that
+    /// set it disconnects — which khora does after each invocation. Flags
+    /// accumulate; --reset clears everything.
+    #[command(group = clap::ArgGroup::new("media_flags").required(true).multiple(true))]
+    EmulateMedia {
+        /// Session ID
+        session: String,
+        /// prefers-color-scheme value
+        #[arg(long, group = "media_flags", value_parser = ["light", "dark", "no-preference"])]
+        color_scheme: Option<String>,
+        /// prefers-reduced-motion value
+        #[arg(long, group = "media_flags", value_parser = ["reduce", "no-preference"])]
+        reduced_motion: Option<String>,
+        /// forced-colors value
+        #[arg(long, group = "media_flags", value_parser = ["active", "none"])]
+        forced_colors: Option<String>,
+        /// Media type to emulate
+        #[arg(long, group = "media_flags", value_parser = ["screen", "print"])]
+        media: Option<String>,
+        /// Drop all media overrides and restore Chrome's own defaults
+        #[arg(long, group = "media_flags",
+              conflicts_with_all = ["color_scheme", "reduced_motion", "forced_colors", "media"])]
+        reset: bool,
+    },
+
     /// Find elements by CSS selector
     Find {
         /// Session ID
@@ -597,6 +625,44 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 }))
                 .unwrap()),
             }
+        }
+
+        Command::EmulateMedia {
+            session,
+            color_scheme,
+            reduced_motion,
+            forced_colors,
+            media,
+            reset,
+        } => {
+            let requested = khora_core::session::MediaEmulation {
+                media: media.clone(),
+                color_scheme: color_scheme.clone(),
+                reduced_motion: reduced_motion.clone(),
+                forced_colors: forced_colors.clone(),
+            };
+
+            let mut session_info = khora_cdp::load_and_verify(session)?;
+            // Merge onto what the session already emulates, so setting one
+            // feature doesn't silently drop the others.
+            let mut effective = if *reset {
+                khora_core::session::MediaEmulation::default()
+            } else {
+                session_info.media.clone().unwrap_or_default()
+            };
+            effective.merge(&requested);
+
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client.emulate_media(&effective).await?;
+
+            // Persist only after Chrome accepted it, so a rejected value can't
+            // leave later commands re-applying something that never worked.
+            session_info.media = Some(effective.clone()).filter(|m| !m.is_empty());
+            session_info.save()?;
+
+            Ok(khora_core::output::format_media_emulation(
+                &effective, cli.format,
+            ))
         }
 
         Command::Find { session, selector } => {

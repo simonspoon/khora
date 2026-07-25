@@ -1,5 +1,5 @@
 use crate::element::{ConsoleMessage, ElementInfo, NetworkRequest};
-use crate::session::SessionInfo;
+use crate::session::{MediaEmulation, SessionInfo};
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -18,6 +18,33 @@ pub fn format_session(session: &SessionInfo, format: OutputFormat) -> String {
             )
         }
         OutputFormat::Json => serde_json::to_string_pretty(session).unwrap_or_default(),
+    }
+}
+
+/// Format the media emulation now in effect for a session.
+pub fn format_media_emulation(media: &MediaEmulation, format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Text => {
+            if media.is_empty() {
+                return "Media emulation cleared.".to_string();
+            }
+            let mut parts = Vec::new();
+            if let Some(v) = &media.media {
+                parts.push(format!("media={v}"));
+            }
+            for (name, value) in media.features() {
+                parts.push(format!("{name}={value}"));
+            }
+            format!("Media emulated: {}", parts.join(" "))
+        }
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "action": "emulate_media",
+            "media": media.media,
+            "color_scheme": media.color_scheme,
+            "reduced_motion": media.reduced_motion,
+            "forced_colors": media.forced_colors,
+        }))
+        .unwrap_or_default(),
     }
 }
 
@@ -148,6 +175,7 @@ mod tests {
             headless: true,
             created_at: 1700000000,
             data_dir: None,
+            media: None,
         }
     }
 

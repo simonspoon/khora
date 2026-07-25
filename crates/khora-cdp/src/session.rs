@@ -159,6 +159,7 @@ mod tests {
             headless: true,
             created_at: now_secs(),
             data_dir: None,
+            media: None,
         }
     }
 

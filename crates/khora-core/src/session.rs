@@ -4,6 +4,74 @@ use std::path::PathBuf;
 use crate::config::KhoraConfig;
 use crate::error::{KhoraError, KhoraResult};
 
+/// CSS media state emulated for a session (CDP `Emulation.setEmulatedMedia`).
+///
+/// Chrome reverts media emulation as soon as the CDP client that set it
+/// disconnects, and khora opens a fresh connection per command — so a one-shot
+/// call would be gone before the next invocation could observe it. The state
+/// lives here instead and is re-applied on every connect.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MediaEmulation {
+    /// Media type to emulate (`screen`, `print`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    /// `prefers-color-scheme` value (`light`, `dark`, `no-preference`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme: Option<String>,
+    /// `prefers-reduced-motion` value (`reduce`, `no-preference`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reduced_motion: Option<String>,
+    /// `forced-colors` value (`active`, `none`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forced_colors: Option<String>,
+}
+
+impl MediaEmulation {
+    /// True when nothing is overridden — Chrome's own defaults apply.
+    pub fn is_empty(&self) -> bool {
+        self.media.is_none()
+            && self.color_scheme.is_none()
+            && self.reduced_motion.is_none()
+            && self.forced_colors.is_none()
+    }
+
+    /// Overlay whatever `other` sets, leaving the rest in place.
+    ///
+    /// Makes the overrides accumulate across calls, so `--color-scheme dark`
+    /// followed by `--media print` keeps the dark scheme rather than the second
+    /// call silently dropping it.
+    pub fn merge(&mut self, other: &Self) {
+        if other.media.is_some() {
+            self.media.clone_from(&other.media);
+        }
+        if other.color_scheme.is_some() {
+            self.color_scheme.clone_from(&other.color_scheme);
+        }
+        if other.reduced_motion.is_some() {
+            self.reduced_motion.clone_from(&other.reduced_motion);
+        }
+        if other.forced_colors.is_some() {
+            self.forced_colors.clone_from(&other.forced_colors);
+        }
+    }
+
+    /// The overridden media features as CDP `(name, value)` pairs.
+    /// The media *type* is a separate CDP field and is not included here.
+    pub fn features(&self) -> Vec<(&'static str, String)> {
+        let mut features = Vec::new();
+        if let Some(v) = &self.color_scheme {
+            features.push(("prefers-color-scheme", v.clone()));
+        }
+        if let Some(v) = &self.reduced_motion {
+            features.push(("prefers-reduced-motion", v.clone()));
+        }
+        if let Some(v) = &self.forced_colors {
+            features.push(("forced-colors", v.clone()));
+        }
+        features
+    }
+}
+
 /// Session info persisted to disk so CLI invocations can reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -20,6 +88,9 @@ pub struct SessionInfo {
     /// Chrome user data directory for this session (cleaned up on close).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_dir: Option<PathBuf>,
+    /// Media features emulated for this session, re-applied on every connect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaEmulation>,
 }
 
 impl SessionInfo {
@@ -107,6 +178,7 @@ mod tests {
             headless: true,
             created_at: 1700000000,
             data_dir: None,
+            media: None,
         }
     }
 
@@ -118,6 +190,62 @@ mod tests {
         assert_eq!(parsed.id, "test123");
         assert_eq!(parsed.pid, 12345);
         assert!(parsed.headless);
+    }
+
+    #[test]
+    fn test_session_without_media_field_still_loads() {
+        // Session files written before media emulation existed must keep working.
+        let json = r#"{"id":"old","ws_url":"ws://x","pid":1,"headless":true,"created_at":0}"#;
+        let parsed: SessionInfo = serde_json::from_str(json).unwrap();
+        assert!(parsed.media.is_none());
+    }
+
+    #[test]
+    fn test_media_emulation_merge_keeps_unmentioned_features() {
+        let mut state = MediaEmulation {
+            color_scheme: Some("dark".to_string()),
+            ..Default::default()
+        };
+        state.merge(&MediaEmulation {
+            media: Some("print".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(state.color_scheme.as_deref(), Some("dark"));
+        assert_eq!(state.media.as_deref(), Some("print"));
+    }
+
+    #[test]
+    fn test_media_emulation_merge_overwrites_same_feature() {
+        let mut state = MediaEmulation {
+            color_scheme: Some("dark".to_string()),
+            ..Default::default()
+        };
+        state.merge(&MediaEmulation {
+            color_scheme: Some("light".to_string()),
+            ..Default::default()
+        });
+        assert_eq!(state.color_scheme.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn test_media_emulation_features_excludes_media_type() {
+        let state = MediaEmulation {
+            media: Some("print".to_string()),
+            color_scheme: Some("dark".to_string()),
+            reduced_motion: Some("reduce".to_string()),
+            forced_colors: Some("active".to_string()),
+        };
+        let features = state.features();
+        assert_eq!(
+            features,
+            vec![
+                ("prefers-color-scheme", "dark".to_string()),
+                ("prefers-reduced-motion", "reduce".to_string()),
+                ("forced-colors", "active".to_string()),
+            ]
+        );
+        assert!(!state.is_empty());
+        assert!(MediaEmulation::default().is_empty());
     }
 
     #[test]

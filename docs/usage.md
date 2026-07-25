@@ -74,6 +74,67 @@ khora commands and navigations. The `dpr` and `--mobile` parts of the
 override are applied but can reset once the invocation disconnects —
 rely on the width/height, not on `devicePixelRatio`, in later commands.
 
+### Media features (dark mode, reduced motion, print)
+
+`emulate-media` overrides what CSS media queries report (CDP
+`Emulation.setEmulatedMedia`), so a system-following theme can be exercised
+without touching the OS setting:
+
+```bash
+khora emulate-media "$S" --color-scheme dark
+khora eval "$S" 'matchMedia("(prefers-color-scheme: dark)").matches'   # → true
+khora emulate-media "$S" --color-scheme light                          # flip it back
+khora emulate-media "$S" --reset                                       # Chrome's own defaults
+```
+
+| Flag | Values |
+|------|--------|
+| `--color-scheme` | `light`, `dark`, `no-preference` |
+| `--reduced-motion` | `reduce`, `no-preference` |
+| `--forced-colors` | `active`, `none` |
+| `--media` | `screen`, `print` |
+| `--reset` | clears every override above |
+
+Flags accumulate across calls, so setting one feature never silently drops
+another. `--reset` is the only way to clear them, and can't be combined with
+the others:
+
+```bash
+khora emulate-media "$S" --color-scheme dark
+khora emulate-media "$S" --media print        # still dark, now also print
+```
+
+**Why this fires real change events.** A page's own
+`matchMedia('(prefers-color-scheme: dark)')` subscription can't be driven from
+`eval`: `matchMedia()` returns a *fresh* `MediaQueryList` on every call, so a
+`change` event dispatched from page JS never reaches the object the app
+registered its listener on. Emulating the feature changes the real media state,
+so the app's own listener fires and re-renders — which is what makes a
+theme-switching UI testable end to end:
+
+```bash
+khora emulate-media "$S" --color-scheme dark
+# the app's change handler has re-rendered by the time the next command lands
+khora eval "$S" 'document.body.dataset.theme'    # → dark
+khora screenshot "$S" -o dark.png
+```
+
+Assert the *result* of the flip (a class, a computed style, a screenshot)
+rather than the event itself — delivery is a task on the page's event loop, so
+an assertion in the same breath as the flip can outrun the re-render.
+
+Unlike `set-viewport`, media emulation is **not** something Chrome keeps on its
+own: it is reverted the moment the CDP client that set it disconnects, which
+khora does at the end of every command. khora therefore records the state on
+the session and re-applies it on each connect. The practical consequence is
+that between two khora commands the page is momentarily back on Chrome's
+defaults, so a page that *logs* or *counts* scheme changes will see extra
+transitions; the state observed by any khora command is always the one you set.
+
+`@media print` rules are covered by the same command — `--media print` applies
+the print cascade to the live page, so `getComputedStyle` reports printed
+values without exporting a PDF.
+
 ### Multiple sessions
 
 ```bash

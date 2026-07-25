@@ -1,5 +1,7 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
-use chromiumoxide::cdp::browser_protocol::emulation::SetDeviceMetricsOverrideParams;
+use chromiumoxide::cdp::browser_protocol::emulation::{
+    MediaFeature, SetDeviceMetricsOverrideParams, SetEmulatedMediaParams,
+};
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
     MouseButton,
@@ -13,7 +15,7 @@ use chromiumoxide::Page;
 use futures::StreamExt;
 use khora_core::element::{BoundingBox, ConsoleMessage, ElementInfo, NetworkRequest};
 use khora_core::error::{KhoraError, KhoraResult};
-use khora_core::session::SessionInfo;
+use khora_core::session::{MediaEmulation, SessionInfo};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,6 +27,9 @@ pub struct CdpClient {
     _handler_handle: tokio::task::JoinHandle<()>,
     data_dir: Option<PathBuf>,
     pid: u32,
+    /// Media emulation carried by the session, re-applied to each page this
+    /// client resolves — Chrome drops it when the previous command disconnected.
+    media: Option<MediaEmulation>,
 }
 
 impl CdpClient {
@@ -102,6 +107,7 @@ impl CdpClient {
             headless,
             created_at,
             data_dir: Some(data_dir.clone()),
+            media: None,
         };
 
         let client = Self {
@@ -109,6 +115,7 @@ impl CdpClient {
             _handler_handle: handler_handle,
             data_dir: Some(data_dir),
             pid,
+            media: None,
         };
 
         Ok((client, session))
@@ -150,6 +157,7 @@ impl CdpClient {
             _handler_handle: handler_handle,
             data_dir: None,
             pid: session.pid,
+            media: session.media.clone().filter(|m| !m.is_empty()),
         })
     }
 
@@ -1701,10 +1709,40 @@ impl CdpClient {
         Ok(())
     }
 
+    /// Emulate CSS media state on the current page (CDP
+    /// `Emulation.setEmulatedMedia`).
+    ///
+    /// Unlike a device-metrics override, media emulation does *not* survive the
+    /// CDP client disconnecting, so the caller is expected to have persisted
+    /// `media` into the session — `connect()` reloads it and every page this
+    /// client hands out gets it re-applied. Pass an empty `MediaEmulation` to
+    /// hand control back to Chrome's own defaults.
+    ///
+    /// The page's own `matchMedia()` listeners receive real `change` events
+    /// from this, which page-side JS cannot synthesize: `matchMedia()` returns
+    /// a fresh `MediaQueryList` each call, so a dispatched event never reaches
+    /// the object the app registered on.
+    pub async fn emulate_media(&self, media: &MediaEmulation) -> KhoraResult<()> {
+        // resolve_page() rather than get_or_create_page(): the latter would
+        // first re-apply the session's *previous* state, and the page would see
+        // a spurious `change` to it on the way to the state being asked for.
+        let page = self.resolve_page().await?;
+        apply_media(&page, media).await
+    }
+
     /// Get the active page, preferring non-blank pages.
     /// After connect(), fetch_targets() has been called so pages from previous
     /// connections are visible via pages().
     async fn get_or_create_page(&self) -> KhoraResult<Page> {
+        let page = self.resolve_page().await?;
+        if let Some(media) = &self.media {
+            apply_media(&page, media).await?;
+        }
+        Ok(page)
+    }
+
+    /// Pick the page `get_or_create_page()` should operate on.
+    async fn resolve_page(&self) -> KhoraResult<Page> {
         let pages = self
             .browser
             .pages()
@@ -1746,6 +1784,28 @@ impl CdpClient {
         // Fall back to the first page
         Ok(pages.into_iter().next().unwrap())
     }
+}
+
+/// Push a media-emulation state to a page.
+///
+/// `Emulation.setEmulatedMedia` replaces the whole state on every call rather
+/// than adding to it, so the full desired state is always sent — an empty
+/// `media` string and no features is how the override is released.
+async fn apply_media(page: &Page, media: &MediaEmulation) -> KhoraResult<()> {
+    let params = SetEmulatedMediaParams::builder()
+        .media(media.media.clone().unwrap_or_default())
+        .features(
+            media
+                .features()
+                .into_iter()
+                .map(|(name, value)| MediaFeature::new(name, value))
+                .collect::<Vec<_>>(),
+        )
+        .build();
+    page.execute(params)
+        .await
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+    Ok(())
 }
 
 /// Extract the OS PID of the launched Chrome process (best effort — 0 means unknown).

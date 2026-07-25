@@ -679,6 +679,51 @@ assert_contains "viewport persists across navigate" "$OUTPUT" "390"
 OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
 assert_contains "viewport survives a screenshot" "$OUTPUT" "390"
 
+# ── emulate-media ────────────────────────────────────────
+
+printf "\n${BOLD}▸ emulate-media${NC}\n"
+
+# Pin the scheme to dark FIRST, so the flip below is a real transition on any
+# host. Asserting a change event after emulating whatever the machine already
+# defaults to would pass only where the default is the opposite value.
+"$KHORA" emulate-media "$SESSION" --color-scheme dark >/dev/null 2>&1
+
+# Register a listener on the page's own MediaQueryList before flipping. This
+# is the half that page-side JS can't fake: matchMedia() hands back a fresh
+# MediaQueryList per call, so a synthetic 'change' never reaches this object.
+"$KHORA" eval "$SESSION" '(()=>{window.__schemeHits=[];matchMedia("(prefers-color-scheme: dark)").addEventListener("change",e=>window.__schemeHits.push(e.matches));return "ok"})()' >/dev/null 2>&1
+
+OUTPUT=$("$KHORA" emulate-media "$SESSION" --color-scheme light 2>&1)
+EC=$?
+assert_exit "emulate-media exits 0" "$EC" 0
+assert_contains "emulate-media reports the feature" "$OUTPUT" "prefers-color-scheme=light"
+
+# Chrome drops media emulation when the setting CDP client disconnects, which
+# khora does after every command — so this only passes because the override is
+# persisted on the session and re-applied on connect.
+OUTPUT=$("$KHORA" eval "$SESSION" 'matchMedia("(prefers-color-scheme: light)").matches' 2>&1)
+assert_contains "emulation survives into a later invocation" "$OUTPUT" "true"
+
+OUTPUT=$("$KHORA" eval "$SESSION" '(()=>new Promise(r=>setTimeout(()=>r(window.__schemeHits.length>0),150)))()' 2>&1)
+assert_contains "page's own matchMedia listener got a change event" "$OUTPUT" "true"
+
+# Overrides accumulate; setting one feature must not drop the others.
+"$KHORA" emulate-media "$SESSION" --media print >/dev/null 2>&1
+OUTPUT=$("$KHORA" emulate-media "$SESSION" --forced-colors active 2>&1)
+assert_contains "merge keeps the earlier color-scheme" "$OUTPUT" "prefers-color-scheme=light"
+assert_contains "merge keeps the earlier media type" "$OUTPUT" "media=print"
+
+OUTPUT=$("$KHORA" eval "$SESSION" 'matchMedia("print").matches' 2>&1)
+assert_contains "media type print applied" "$OUTPUT" "true"
+
+OUTPUT=$("$KHORA" emulate-media "$SESSION" --reset 2>&1)
+assert_contains "reset reports cleared" "$OUTPUT" "cleared"
+OUTPUT=$("$KHORA" eval "$SESSION" 'matchMedia("print").matches' 2>&1)
+assert_contains "reset restores Chrome defaults" "$OUTPUT" "false"
+
+"$KHORA" emulate-media "$SESSION" >/dev/null 2>&1
+assert_exit "emulate-media with no flags is an error" "$?" 2
+
 # ── JSON output format ──────────────────────────────────
 
 printf "\n${BOLD}▸ JSON format${NC}\n"

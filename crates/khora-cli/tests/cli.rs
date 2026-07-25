@@ -567,6 +567,65 @@ fn test_set_viewport_rejects_negative_dpr() {
 }
 
 #[test]
+fn test_emulate_media_help() {
+    khora()
+        .args(["emulate-media", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--color-scheme"))
+        .stdout(predicate::str::contains("--reduced-motion"))
+        .stdout(predicate::str::contains("--forced-colors"))
+        .stdout(predicate::str::contains("--reset"));
+}
+
+#[test]
+fn test_emulate_media_nonexistent_session() {
+    khora()
+        .args(["emulate-media", "nonexistent_xyz", "--color-scheme", "dark"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_emulate_media_requires_a_flag() {
+    khora()
+        .args(["emulate-media", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--color-scheme"));
+}
+
+#[test]
+fn test_emulate_media_rejects_unknown_color_scheme() {
+    khora()
+        .args([
+            "emulate-media",
+            "nonexistent_xyz",
+            "--color-scheme",
+            "sepia",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("sepia"));
+}
+
+#[test]
+fn test_emulate_media_reset_conflicts_with_overrides() {
+    khora()
+        .args([
+            "emulate-media",
+            "nonexistent_xyz",
+            "--reset",
+            "--color-scheme",
+            "dark",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
 fn test_reap_no_sessions() {
     khora().args(["reap"]).assert().success();
 }
