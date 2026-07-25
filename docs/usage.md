@@ -324,8 +324,19 @@ for a user.
 
 ```bash
 khora type-keys "$S" ".xterm-helper-textarea" "ls -la"
-khora key "$S" "Enter"           # type-keys doesn't send control characters
+khora key "$S" "Enter"           # or embed a newline in the text
 ```
+
+Each character is sent with the `code` and virtual-key code of the physical
+US-layout key that produces it — `-` is `Minus`/189, `!` is `Digit1`/49, a
+newline is `Enter`/13. That matters for terminal emulators specifically:
+xterm.js decides what to write to the PTY from `keyCode`, not `key`, so a
+character carrying the wrong virtual key is delivered as an escape sequence
+rather than as itself. (Up to khora 0.3.17, unmapped characters reported
+their Unicode codepoint as the virtual key, which put `-` on 45 = Insert;
+`stty -echo` reached the shell as `stty <ESC>[2~echo`.) Characters with no
+US-layout key — accented letters, CJK, emoji — still arrive as text via the
+`char` event.
 
 Verifying a field that saves on blur — type with `type-keys`, then `blur` and
 check the app actually committed:

@@ -1489,10 +1489,16 @@ impl CdpClient {
     /// [`Self::key_info`], `key` preserves the character's actual case (a
     /// real Shift+H keydown reports `key: "H"`, not `"h"`) — `code` is the
     /// physical key position, which stays the same regardless of case.
-    /// Characters with no known physical key (punctuation, Unicode outside
-    /// ASCII alnum/space) fall back to `code: "Unidentified"` and a
-    /// best-effort virtual-key code — harmless since `type_keys` targets are
-    /// expected to key off `key`, not `code`/`keyCode`.
+    ///
+    /// The virtual-key code matters as much as `key`: xterm.js and other
+    /// terminal emulators dispatch off `keyCode`, not `key`. Reporting a
+    /// character's codepoint as its virtual-key code (the old fallback)
+    /// silently turned punctuation into navigation keys — `-` is U+002D = 45
+    /// = `VK_INSERT`, so typing `stty -echo` delivered `ESC[2~` in place of
+    /// every hyphen. Every ASCII printable therefore gets its real US-layout
+    /// `code`/virtual-key pair here, and anything still unmapped reports
+    /// virtual key 0 rather than a codepoint that could land in the
+    /// editing/navigation range (`VK` 8..=46).
     fn char_key_info(c: char) -> (String, String, i64) {
         if c.is_ascii_alphabetic() {
             let upper = c.to_ascii_uppercase();
@@ -1501,14 +1507,49 @@ impl CdpClient {
         if c.is_ascii_digit() {
             return (c.to_string(), format!("Digit{c}"), i64::from(c as u8));
         }
-        if c == ' ' {
-            return (" ".to_string(), "Space".to_string(), 32);
+        // US-layout physical keys. Shifted characters report the same `code`
+        // and virtual key as their unshifted twin — a real `!` keydown is
+        // Shift+Digit1, i.e. `code: "Digit1"`, `keyCode: 49`. `key` carries
+        // the shifted character, which is what listeners read for text.
+        if let Some((code, vk)) = match c {
+            ' ' => Some(("Space", 32)),
+            '!' => Some(("Digit1", 49)),
+            '@' => Some(("Digit2", 50)),
+            '#' => Some(("Digit3", 51)),
+            '$' => Some(("Digit4", 52)),
+            '%' => Some(("Digit5", 53)),
+            '^' => Some(("Digit6", 54)),
+            '&' => Some(("Digit7", 55)),
+            '*' => Some(("Digit8", 56)),
+            '(' => Some(("Digit9", 57)),
+            ')' => Some(("Digit0", 48)),
+            ';' | ':' => Some(("Semicolon", 186)),
+            '=' | '+' => Some(("Equal", 187)),
+            ',' | '<' => Some(("Comma", 188)),
+            '-' | '_' => Some(("Minus", 189)),
+            '.' | '>' => Some(("Period", 190)),
+            '/' | '?' => Some(("Slash", 191)),
+            '`' | '~' => Some(("Backquote", 192)),
+            '[' | '{' => Some(("BracketLeft", 219)),
+            '\\' | '|' => Some(("Backslash", 220)),
+            ']' | '}' => Some(("BracketRight", 221)),
+            '\'' | '"' => Some(("Quote", 222)),
+            '\n' | '\r' => Some(("Enter", 13)),
+            '\t' => Some(("Tab", 9)),
+            _ => None,
+        } {
+            return (c.to_string(), code.to_string(), vk);
         }
-        (
-            c.to_string(),
-            "Unidentified".to_string(),
-            i64::from(u32::from(c)),
-        )
+        // No physical key known. Non-ASCII characters keep the codepoint —
+        // it is above the navigation range and terminals need a nonzero
+        // keyCode to treat the event as printable — but control characters
+        // report 0 rather than impersonating an editing key.
+        let vk = if u32::from(c) >= 48 {
+            i64::from(u32::from(c))
+        } else {
+            0
+        };
+        (c.to_string(), "Unidentified".to_string(), vk)
     }
 
     /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.
@@ -1855,5 +1896,113 @@ fn get_browser_pid(browser: &mut Browser) -> u32 {
 pub fn cleanup_data_dir(dir: &std::path::Path) {
     if let Err(e) = std::fs::remove_dir_all(dir) {
         tracing::warn!(?dir, %e, "failed to remove Chrome data dir");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Virtual-key codes a terminal emulator reads as an editing or
+    /// navigation key rather than as text: Backspace/Tab/Enter, Escape,
+    /// PageUp..ArrowDown, Insert, Delete. A printable character that reports
+    /// one of these is delivered as an escape sequence instead of itself.
+    fn is_navigation_vk(vk: i64) -> bool {
+        matches!(vk, 8 | 9 | 13 | 27 | 33..=46)
+    }
+
+    #[test]
+    fn char_key_info_maps_hyphen_to_the_minus_key() {
+        // Regression: '-' is U+002D = 45 = VK_INSERT. Reporting the codepoint
+        // as the virtual key made xterm.js emit ESC[2~ for every hyphen, so
+        // `type-keys $S SEL 'stty -echo'` reached the shell garbled.
+        assert_eq!(
+            CdpClient::char_key_info('-'),
+            ("-".to_string(), "Minus".to_string(), 189)
+        );
+    }
+
+    #[test]
+    fn char_key_info_maps_plus_to_the_shifted_equal_key() {
+        assert_eq!(
+            CdpClient::char_key_info('+'),
+            ("+".to_string(), "Equal".to_string(), 187)
+        );
+    }
+
+    #[test]
+    fn char_key_info_never_gives_punctuation_a_navigation_key_code() {
+        // The collision class is much wider than '-': '!' is 33 (PageUp),
+        // '&' is 38 (ArrowUp), '.' is 46 (Delete), '{' is 123 (F12)...
+        for c in ('!'..='~').filter(|c| !c.is_ascii_alphanumeric()) {
+            let (key, code, vk) = CdpClient::char_key_info(c);
+            assert_eq!(key, c.to_string(), "key must be the character itself");
+            assert_ne!(code, "Unidentified", "{c:?} has no physical key mapped");
+            assert!(
+                !is_navigation_vk(vk),
+                "{c:?} maps to virtual key {vk}, an editing/navigation key"
+            );
+            assert!(
+                !(112..=123).contains(&vk),
+                "{c:?} maps to virtual key {vk}, a function key"
+            );
+            assert!(
+                vk >= 48,
+                "{c:?} maps to virtual key {vk}; terminals treat keyCode < 48 as non-printable"
+            );
+        }
+    }
+
+    #[test]
+    fn char_key_info_keeps_alphanumerics_and_space_on_their_own_keys() {
+        assert_eq!(
+            CdpClient::char_key_info('h'),
+            ("h".to_string(), "KeyH".to_string(), 72)
+        );
+        // `key` preserves case; `code` is the physical key either way.
+        assert_eq!(
+            CdpClient::char_key_info('H'),
+            ("H".to_string(), "KeyH".to_string(), 72)
+        );
+        assert_eq!(
+            CdpClient::char_key_info('7'),
+            ("7".to_string(), "Digit7".to_string(), 55)
+        );
+        assert_eq!(
+            CdpClient::char_key_info(' '),
+            (" ".to_string(), "Space".to_string(), 32)
+        );
+    }
+
+    #[test]
+    fn char_key_info_maps_newline_and_tab_to_their_real_keys() {
+        // U+000A/U+0009 as virtual keys would be 10 (unassigned) and 9 (Tab);
+        // a newline in typed text should submit like Enter, not fire nothing.
+        assert_eq!(
+            CdpClient::char_key_info('\n'),
+            ("\n".to_string(), "Enter".to_string(), 13)
+        );
+        assert_eq!(
+            CdpClient::char_key_info('\t'),
+            ("\t".to_string(), "Tab".to_string(), 9)
+        );
+    }
+
+    #[test]
+    fn char_key_info_falls_back_without_impersonating_an_editing_key() {
+        // Non-ASCII keeps the codepoint — above the navigation range, and
+        // terminals need a nonzero keyCode to treat the event as printable.
+        let (key, code, vk) = CdpClient::char_key_info('é');
+        assert_eq!(key, "é");
+        assert_eq!(code, "Unidentified");
+        assert_eq!(vk, 233);
+
+        // Control characters report 0 rather than a navigation key: U+0008
+        // would otherwise be Backspace, U+001B Escape.
+        for c in ['\u{8}', '\u{1b}', '\u{7}'] {
+            let (_, code, vk) = CdpClient::char_key_info(c);
+            assert_eq!(code, "Unidentified");
+            assert_eq!(vk, 0, "{c:?} must not impersonate an editing key");
+        }
     }
 }

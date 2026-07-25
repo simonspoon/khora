@@ -466,6 +466,34 @@ OUTPUT=$("$KHORA" type-keys "$SESSION" "nonexistent-selector" "x" 2>&1)
 EC=$?
 assert_exit "type-keys on missing selector exits nonzero" "$EC" 1
 
+# Regression for mesa task 553: the #term-input widget above reads `e.key`,
+# but a real terminal emulator dispatches off `keyCode` — so this needs its
+# own widget. Pre-fix, char_key_info reported each unmapped character's
+# codepoint as its virtual key, and '-' (U+002D = 45) arrived as Insert:
+# `stty -echo` reached the shell as `stty <ESC>[2~echo`.
+"$KHORA" type-keys "$SESSION" "#vk-input" "stty -echo -icanon; cat -v" >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#vk-result" 2>&1)
+assert_contains "type-keys sends '-' as a literal hyphen, not Insert" \
+  "$OUTPUT" "sent:stty -echo -icanon; cat -v"
+
+# The collision class is wider than '-': '!' is 33 (PageUp), '&' 38 (Up),
+# '.' 46 (Delete), '{' 123 (F12). '+' (43) is unassigned and survived by
+# luck. Single quote spliced in the middle, hence the quoting.
+COLLIDE='!"#$%&'"'"'()*+,-./{}'
+"$KHORA" type-keys "$SESSION" "#vk-input" "$COLLIDE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#vk-result" 2>&1)
+assert_contains "type-keys sends chord-shaped punctuation literally" "$OUTPUT" "$COLLIDE"
+for NAVKEY in "<Insert>" "<Delete>" "<PageUp>" "<PageDown>" "<Home>" "<End>" \
+              "<Left>" "<Right>" "<Up>" "<Down>" "<F12>"; do
+  assert_not_contains "type-keys never emits $NAVKEY for a printable character" \
+    "$OUTPUT" "$NAVKEY"
+done
+
+# A newline in the text is Enter (virtual key 13), not U+000A-as-a-key-code.
+"$KHORA" type-keys "$SESSION" "#vk-input" $'ab\ncd' >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#vk-result" 2>&1)
+assert_contains "type-keys sends an embedded newline as Enter" "$OUTPUT" "ab<Enter>cd"
+
 # mesa task 464: text inserts at the caret, so editing a field that already
 # has a value appends to it. Confirm that, then that --clear replaces.
 "$KHORA" eval "$SESSION" 'document.querySelector("#focus-input").value = "Old"; "ok"' >/dev/null 2>&1

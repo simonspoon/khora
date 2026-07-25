@@ -57,6 +57,13 @@
   <textarea id="term-input" style="position: absolute; left: -9999px; top: 0; width: 0; height: 0;"></textarea>
   <div id="term-result"></div>
 
+  <!-- keyCode test (mesa task 553): xterm.js dispatches off `keyCode`, not
+       `key`, so a character whose virtual-key code lands in the navigation
+       range is delivered as an escape sequence instead of itself. This
+       widget decodes exactly like a terminal does. -->
+  <textarea id="vk-input" style="position: absolute; left: -9999px; top: 0; width: 0; height: 0;"></textarea>
+  <div id="vk-result"></div>
+
   <!-- focus/blur test: `document.hasFocus()` is false in headless Chrome, so
        the JS `el.focus()` that `type` performs moves `activeElement` without
        the browser dispatching any focus event — and a later `blur()` then
@@ -205,6 +212,25 @@
         buf += e.key;
         document.getElementById('term-result').textContent =
           'typed:' + buf + ' trusted:' + e.isTrusted;
+      });
+    })();
+
+    // type-keys keyCode test (mesa task 553): a terminal emulator decides
+    // what to send from `keyCode`, falling back to `key` only for codes it
+    // does not claim. Pre-fix, char_key_info reported the character's
+    // codepoint as its virtual key, so '-' (U+002D = 45 = VK_INSERT) reached
+    // xterm.js as Insert and a real shell received ESC[2~ in its place.
+    (function() {
+      var NAV = {
+        8: 'BS', 9: 'Tab', 13: 'Enter', 27: 'Esc', 33: 'PageUp',
+        34: 'PageDown', 35: 'End', 36: 'Home', 37: 'Left', 38: 'Up',
+        39: 'Right', 40: 'Down', 45: 'Insert', 46: 'Delete',
+        112: 'F1', 122: 'F11', 123: 'F12'
+      };
+      var buf = '';
+      document.getElementById('vk-input').addEventListener('keydown', function(e) {
+        buf += NAV[e.keyCode] ? '<' + NAV[e.keyCode] + '>' : e.key;
+        document.getElementById('vk-result').textContent = 'sent:' + buf;
       });
     })();
 
