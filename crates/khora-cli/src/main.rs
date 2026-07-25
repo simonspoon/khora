@@ -429,6 +429,20 @@ enum Command {
         timeout: Option<u64>,
     },
 
+    /// List the browser's open targets (tabs, workers) for a session
+    ///
+    /// Shows type, url and title per target, plus two independent flags:
+    /// `active` (Chrome's foreground tab) and `driven` (the one every other
+    /// khora command operates on). A `driven` target that isn't `active` is
+    /// the background-tab state that silently corrupts trusted key input —
+    /// the failure mode behind mesa task 551. Read-only: unlike the other
+    /// commands it never creates a tab when the browser has none.
+    #[command(alias = "pages")]
+    Targets {
+        /// Session ID
+        session: String,
+    },
+
     /// Read console messages
     Console {
         /// Session ID
@@ -988,6 +1002,13 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 )
                 .unwrap()),
             }
+        }
+
+        Command::Targets { session } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            let targets = client.targets().await?;
+            Ok(khora_core::output::format_targets(&targets, cli.format))
         }
 
         Command::Console { session } => {

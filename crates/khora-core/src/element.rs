@@ -51,6 +51,26 @@ pub struct ConsoleMessage {
     pub text: String,
 }
 
+/// An open browser target (tab, worker, ...) as reported by `Target.getTargets`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserTarget {
+    /// CDP target id.
+    pub target_id: String,
+    /// Target type: "page", "iframe", "service_worker", "worker", ...
+    #[serde(rename = "type")]
+    pub target_type: String,
+    pub url: String,
+    pub title: String,
+    /// Whether this is the foreground tab of its window
+    /// (`document.visibilityState === "visible"`). `None` for targets that
+    /// cannot be probed — non-page types, and pages whose evaluate timed out.
+    pub active: Option<bool>,
+    /// Whether khora's other commands would operate on this target. Exactly
+    /// one target is driven; a `driven` that isn't `active` is the shape of
+    /// the background-tab bug fixed in 1f24769.
+    pub driven: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -22,8 +22,12 @@
 # khora created its own tab via Target.createTarget, then drove that while
 # Chrome's startup tab — which resolves to chrome://newtab/ — stayed the active
 # one. Trusted key dispatch into the resulting background tab keeps its modifier
-# bits but loses key/code. Hence the `pages=N ntp=N` column: every BAD-KEY
-# observed had ntp=1, every clean run had ntp=0 (17/17 vs 0/58).
+# bits but loses key/code. Hence the `pages=N split=yes|no` column, read off
+# `khora targets`: split=yes means the target khora drives is not the
+# foreground one, which is the corrupting state itself. (This column was
+# originally `ntp=N`, a count of chrome://newtab targets scraped from
+# /json/list — a proxy for the same thing: every BAD-KEY observed had ntp=1,
+# every clean run ntp=0, 17/17 vs 0/58.)
 #
 # To reproduce deterministically rather than at ~7% per session, widen the race
 # by cutting the post-fetch_targets() guard in CdpClient::launch() to zero:
@@ -108,18 +112,26 @@ if [[ ! -x "$KHORA" ]]; then
   exit 1
 fi
 
-# Summarise the browser's open targets over the DevTools HTTP port. Reported
-# per dispatch because a stray extra page target turned out to be the state
-# that distinguishes a corrupted key event from a clean one, and knowing
-# whether it predates the dispatch or is created by it is the whole question.
+# Summarise the browser's open targets. Reported per dispatch because a stray
+# extra page target turned out to be the state that distinguishes a corrupted
+# key event from a clean one, and knowing whether it predates the dispatch or
+# is created by it is the whole question.
+#
+# `khora targets` rather than raw curl against /json/list: it answers the
+# sharper question directly. A stray tab only matters when it takes the
+# foreground away from the tab khora drives, and split=yes is that state named
+# outright rather than inferred from a newtab-URL count. `dump_failure` below
+# deliberately keeps the raw HTTP probe — when khora is the thing that's
+# wedged, its own output is not evidence.
 target_summary() {
-  local port targets
-  port=$(grep -oE '127\.0\.0\.1:[0-9]+' "$HOME/.khora/sessions/${SESSION}.json" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ -z "$port" ]] && { echo "pages=? ntp=?"; return; }
-  targets=$(curl -s -m 5 "http://127.0.0.1:${port}/json/list" 2>/dev/null)
-  printf "pages=%s ntp=%s" \
-    "$(echo "$targets" | grep -c '"type": "page"')" \
-    "$(echo "$targets" | grep -c 'chrome://newtab')"
+  local targets
+  targets=$("$KHORA" targets "$SESSION" 2>/dev/null) || { echo "pages=? split=?"; return; }
+  local pages driven_active
+  pages=$(echo "$targets" | grep -c '^page ')
+  driven_active=$(echo "$targets" | grep -c 'active,driven')
+  printf "pages=%s split=%s" \
+    "$pages" \
+    "$([[ "$driven_active" == "1" ]] && echo no || echo yes)"
 }
 
 # Run a khora command, recording wall-clock ms and exit code.

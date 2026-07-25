@@ -514,6 +514,35 @@ khora console "$S"
 
 Captures `console.log/warn/error/info` calls via a page-installed shim, buffered from page load. Useful for catching JS errors a UI test wouldn't otherwise surface.
 
+### Open targets
+
+```bash
+khora targets "$S"        # `pages` is an alias
+# TYPE             STATE          TITLE                          URL
+# page             active,driven  My App                         http://localhost:3000/
+```
+
+Lists every open browser target (tabs, workers) with two independent flags:
+
+- **`active`** — Chrome's foreground tab, read from `document.visibilityState`.
+- **`driven`** — the target every *other* khora command operates on. Exactly one.
+
+They normally coincide. When they don't, khora is driving a background tab —
+clicks and `type` still "succeed" against an invisible page, and trusted `key`
+dispatch silently arrives as `key:Unidentified` with an empty `code`. That
+split is the first thing to check when a command reports success but the page
+you're looking at didn't change:
+
+```bash
+khora targets "$S" | grep -q 'active,driven' || echo "khora is driving a background tab"
+```
+
+`targets` is read-only — unlike every other command it never creates a tab when
+the browser has none, since manufacturing the thing you asked it to report
+would defeat the point. Use `--format json` for `target_id`, `type`, `url`,
+`title`, `active` and `driven` per target; `active` is `null` for targets that
+can't be probed (workers, or a page whose evaluate timed out).
+
 ### Wait patterns
 
 ```bash

@@ -176,6 +176,8 @@ assert_exit "navigate --no-cache exits 0" "$EC" 0
 assert_contains "navigate --no-cache reports bypass" "$OUTPUT" "cache bypassed"
 sleep 0.3
 
+# ── targets ─────────────────────────────────────────────
+
 # Regression for mesa task 551: if Chrome's initial Target.targetCreated had
 # not arrived yet, pages() came back empty and khora manufactured its own tab,
 # then drove that while Chrome's startup tab (which resolves to
@@ -183,11 +185,29 @@ sleep 0.3
 # resulting background tab silently arrives as key:Unidentified with an empty
 # code — the failure only shows up much later, in the `key` block below, and
 # only in ~7% of runs. Assert the invariant directly instead: khora drives
-# Chrome's own single tab and leaves no stray page target behind.
-DEVTOOLS_PORT=$(grep -oE '127\.0\.0\.1:[0-9]+' "$HOME/.khora/sessions/${SESSION}.json" | head -1 | cut -d: -f2)
-TARGETS=$(curl -s -m 5 "http://127.0.0.1:${DEVTOOLS_PORT}/json/list")
-assert_eq "navigate leaves exactly one page target" "$(echo "$TARGETS" | grep -c '"type": "page"')" "1"
-assert_eq "no stray new-tab page target" "$(echo "$TARGETS" | grep -c 'chrome://newtab')" "0"
+# Chrome's own single tab, it is the foreground one, and no stray page target
+# is left behind.
+printf "\n${BOLD}▸ targets${NC}\n"
+OUTPUT=$("$KHORA" targets "$SESSION" 2>&1)
+EC=$?
+assert_exit "targets exits 0" "$EC" 0
+assert_contains "targets reports the fixture tab" "$OUTPUT" "$FIXTURE"
+# The invariant that matters: the tab khora drives is also the active one.
+# Split flags ("driven" without "active") is exactly the 551 failure state.
+assert_contains "driven target is also the active one" "$OUTPUT" "active,driven"
+assert_eq "navigate leaves exactly one page target" "$(echo "$OUTPUT" | grep -c '^page ')" "1"
+assert_not_contains "no stray new-tab page target" "$OUTPUT" "chrome://newtab"
+
+OUTPUT=$("$KHORA" targets "$SESSION" --format json 2>&1)
+EC=$?
+assert_exit "targets --format json exits 0" "$EC" 0
+assert_contains "targets json carries the driven flag" "$OUTPUT" '"driven": true'
+assert_contains "targets json carries the active flag" "$OUTPUT" '"active": true'
+
+# `pages` is the DevTools-endpoint spelling; keep the obvious guess working.
+OUTPUT=$("$KHORA" pages "$SESSION" 2>&1)
+EC=$?
+assert_exit "pages alias exits 0" "$EC" 0
 
 # ── find (single element) ───────────────────────────────
 

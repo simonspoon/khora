@@ -10,10 +10,13 @@ use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
 };
 use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, Viewport};
+use chromiumoxide::cdp::browser_protocol::target::GetTargetsParams;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
-use khora_core::element::{BoundingBox, ConsoleMessage, ElementInfo, NetworkRequest};
+use khora_core::element::{
+    BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest,
+};
 use khora_core::error::{KhoraError, KhoraResult};
 use khora_core::session::{MediaEmulation, SessionInfo};
 use std::path::PathBuf;
@@ -1779,6 +1782,69 @@ impl CdpClient {
         apply_media(&page, media).await
     }
 
+    /// List the browser's open targets, flagging the foreground tab and the
+    /// one khora's other commands would drive.
+    ///
+    /// The `driven`/`active` split is the point: khora resolves its own target
+    /// by URL heuristics, Chrome decides which tab is foregrounded, and when
+    /// those disagree every command still "succeeds" while trusted input goes
+    /// somewhere invisible (mesa task 551). This is read-only — unlike every
+    /// other command it never creates a tab when the browser has none, since
+    /// manufacturing the thing you asked it to report would defeat the point.
+    pub async fn targets(&self) -> KhoraResult<Vec<BrowserTarget>> {
+        let driven = self
+            .find_page()
+            .await?
+            .map(|p| p.target_id().inner().clone());
+
+        // `document.visibilityState` is the only signal for "foreground tab"
+        // — CDP's TargetInfo has no active flag and neither does
+        // /json/list. Probing costs a round-trip per page, so bound each one:
+        // a wedged renderer must not hang the listing that would diagnose it.
+        let mut visible = std::collections::HashMap::new();
+        if let Ok(pages) = self.browser.pages().await {
+            for page in pages {
+                let id = page.target_id().inner().clone();
+                let probe = tokio::time::timeout(
+                    std::time::Duration::from_millis(1000),
+                    page.evaluate("document.visibilityState"),
+                )
+                .await;
+                if let Ok(Ok(result)) = probe {
+                    if let Ok(state) = result.into_value::<String>() {
+                        visible.insert(id, state == "visible");
+                    }
+                }
+            }
+        }
+
+        let returns = self
+            .browser
+            .execute(GetTargetsParams::default())
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        Ok(returns
+            .result
+            .target_infos
+            .iter()
+            // The browser target is the connection itself, not something a
+            // command could ever drive; /json/list omits it too.
+            .filter(|t| t.r#type != "browser")
+            .map(|t| {
+                let id = t.target_id.inner().clone();
+                BrowserTarget {
+                    active: visible.get(&id).copied(),
+                    driven: driven.as_ref() == Some(&id),
+                    target_id: id,
+                    target_type: t.r#type.clone(),
+                    url: t.url.clone(),
+                    title: t.title.clone(),
+                }
+            })
+            .collect())
+    }
+
     /// Get the active page, preferring non-blank pages.
     /// After connect(), fetch_targets() has been called so pages from previous
     /// connections are visible via pages().
@@ -1790,8 +1856,23 @@ impl CdpClient {
         Ok(page)
     }
 
-    /// Pick the page `get_or_create_page()` should operate on.
+    /// Pick the page `get_or_create_page()` should operate on, creating one if
+    /// the browser genuinely has none.
     async fn resolve_page(&self) -> KhoraResult<Page> {
+        match self.find_page().await? {
+            Some(page) => Ok(page),
+            None => self
+                .browser
+                .new_page("about:blank")
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string())),
+        }
+    }
+
+    /// The page khora would drive, or `None` if the browser has no page at
+    /// all. Split out of `resolve_page()` so `targets()` can ask the same
+    /// question without the tab-creating fallback.
+    async fn find_page(&self) -> KhoraResult<Option<Page>> {
         let mut pages = self
             .browser
             .pages()
@@ -1821,11 +1902,7 @@ impl CdpClient {
         }
 
         if pages.is_empty() {
-            return self
-                .browser
-                .new_page("about:blank")
-                .await
-                .map_err(|e| KhoraError::Cdp(e.to_string()));
+            return Ok(None);
         }
 
         // Try to find a non-blank page by CDP target URL first
@@ -1836,7 +1913,7 @@ impl CdpClient {
                     && !url_str.is_empty()
                     && !url_str.starts_with("chrome://")
                 {
-                    return Ok(page.clone());
+                    return Ok(Some(page.clone()));
                 }
             }
         }
@@ -1847,13 +1924,13 @@ impl CdpClient {
             if let Ok(result) = page.evaluate("location.href").await {
                 if let Ok(url) = result.into_value::<String>() {
                     if url != "about:blank" && !url.is_empty() && !url.starts_with("chrome://") {
-                        return Ok(page.clone());
+                        return Ok(Some(page.clone()));
                     }
                 }
             }
         }
         // Fall back to the first page
-        Ok(pages.into_iter().next().unwrap())
+        Ok(pages.into_iter().next())
     }
 }
 

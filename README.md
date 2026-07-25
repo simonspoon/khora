@@ -96,6 +96,7 @@ khora launch --window-size 1366x768
 | `attribute <session> <selector> <attr>` | Get attribute value |
 | `wait-for <session> <selector>` | Wait for element to appear |
 | `wait-gone <session> <selector>` | Wait for element to disappear |
+| `targets <session>` (alias `pages`) | List the browser's open targets — type, url, title, which tab is `active`, and which one khora drives |
 | `console <session>` | Read console messages |
 | `eval <session> <js>` | Execute JavaScript, return result |
 | `kill <session>` | Close browser and clean up (`--all` to kill every session) |

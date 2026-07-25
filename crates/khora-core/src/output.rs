@@ -1,4 +1,4 @@
-use crate::element::{ConsoleMessage, ElementInfo, NetworkRequest};
+use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest};
 use crate::session::{MediaEmulation, SessionInfo};
 
 /// Output format for CLI results.
@@ -162,6 +162,56 @@ pub fn format_network(requests: &[NetworkRequest], format: OutputFormat) -> Stri
     }
 }
 
+/// Format the browser's open targets for display.
+pub fn format_targets(targets: &[BrowserTarget], format: OutputFormat) -> String {
+    match format {
+        OutputFormat::Text => {
+            if targets.is_empty() {
+                return "No targets.".to_string();
+            }
+            let mut lines = Vec::with_capacity(targets.len() + 1);
+            lines.push(format!(
+                "{:<16} {:<14} {:<30} {}",
+                "TYPE", "STATE", "TITLE", "URL"
+            ));
+            for t in targets {
+                // Two independent bits in one column: `active` is Chrome's
+                // foreground tab, `driven` is the one khora acts on. They
+                // normally coincide, and the whole point of this command is
+                // seeing the case where they don't.
+                let mut state = Vec::new();
+                if t.active == Some(true) {
+                    state.push("active");
+                }
+                if t.driven {
+                    state.push("driven");
+                }
+                let state = if state.is_empty() {
+                    "-".to_string()
+                } else {
+                    state.join(",")
+                };
+                let title = truncate(&t.title, 30);
+                lines.push(format!(
+                    "{:<16} {:<14} {:<30} {}",
+                    t.target_type, state, title, t.url
+                ));
+            }
+            lines.join("\n")
+        }
+        OutputFormat::Json => serde_json::to_string_pretty(targets).unwrap_or_default(),
+    }
+}
+
+/// Shorten `s` to at most `max` characters, on a char boundary.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let cut: String = s.chars().take(max.saturating_sub(3)).collect();
+    format!("{cut}...")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +356,74 @@ mod tests {
         assert!(output.contains("GET"));
         assert!(output.contains("200"));
         assert!(output.contains("https://example.com/api"));
+    }
+
+    fn sample_target(title: &str, active: Option<bool>, driven: bool) -> BrowserTarget {
+        BrowserTarget {
+            target_id: format!("T-{title}"),
+            target_type: "page".to_string(),
+            url: format!("https://example.com/{title}"),
+            title: title.to_string(),
+            active,
+            driven,
+        }
+    }
+
+    #[test]
+    fn test_format_targets_empty() {
+        assert_eq!(format_targets(&[], OutputFormat::Text), "No targets.");
+    }
+
+    #[test]
+    fn test_format_targets_text_marks_active_and_driven() {
+        let targets = vec![
+            sample_target("stray", Some(true), false),
+            sample_target("app", Some(false), true),
+        ];
+        let output = format_targets(&targets, OutputFormat::Text);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines[0].contains("STATE"));
+        assert!(lines[1].contains("active") && !lines[1].contains("driven"));
+        assert!(lines[2].contains("driven") && !lines[2].contains("active"));
+    }
+
+    #[test]
+    fn test_format_targets_text_combines_both_flags() {
+        let output = format_targets(
+            &[sample_target("app", Some(true), true)],
+            OutputFormat::Text,
+        );
+        assert!(output.contains("active,driven"));
+    }
+
+    /// Non-page targets can't report visibility; they must not read as
+    /// "backgrounded", which is a diagnosis, not an absence of data.
+    #[test]
+    fn test_format_targets_text_unprobeable_shows_dash() {
+        let mut t = sample_target("sw", None, false);
+        t.target_type = "service_worker".to_string();
+        let output = format_targets(&[t], OutputFormat::Text);
+        assert!(output.lines().nth(1).unwrap().contains(" - "));
+    }
+
+    #[test]
+    fn test_format_targets_truncates_multibyte_title_on_char_boundary() {
+        let mut t = sample_target("x", Some(true), false);
+        t.title = "→".repeat(80);
+        let output = format_targets(&[t], OutputFormat::Text);
+        assert!(output.contains(&format!("{}...", "→".repeat(27))));
+    }
+
+    #[test]
+    fn test_format_targets_json() {
+        let output = format_targets(
+            &[sample_target("app", Some(false), true)],
+            OutputFormat::Json,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed[0]["type"], "page");
+        assert_eq!(parsed[0]["active"], false);
+        assert_eq!(parsed[0]["driven"], true);
     }
 
     #[test]

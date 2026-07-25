@@ -512,6 +512,35 @@ fn test_console_help() {
 }
 
 #[test]
+fn test_targets_help() {
+    khora()
+        .args(["targets", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("open targets"));
+}
+
+#[test]
+fn test_targets_nonexistent_session() {
+    khora()
+        .args(["targets", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+/// `pages` is the name the DevTools endpoint uses; keep it reachable so the
+/// obvious guess works.
+#[test]
+fn test_pages_alias_resolves_to_targets() {
+    khora()
+        .args(["pages", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_text_help() {
     khora()
         .args(["text", "--help"])
