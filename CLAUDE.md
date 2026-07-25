@@ -14,7 +14,12 @@ cargo clippy --workspace --all-targets -- -D warnings   # lint (warnings are err
 cargo fmt --check                              # format check
 make setup                                     # install the pre-commit git hook (fmt + clippy)
 ./tests/e2e/qa.sh                              # end-to-end test; needs Chrome + a debug build
+./tests/e2e/key-wedge-soak.sh 25               # soak harness for the intermittent trusted-`key` wedge
 ```
+
+Diagnostics: `RUST_LOG=khora_cdp=debug khora <cmd>` logs to **stderr** (stdout stays the
+machine-readable result, so `khora eval ... | jq` keeps working with logging on). `key_press`
+logs the exact serialized `Input.dispatchKeyEvent` params it puts on the wire.
 
 CI (`.github/workflows/ci.yml`) runs check, test, clippy `-D warnings`, and fmt on Linux/macOS/Windows. The pre-commit hook enforces fmt + clippy locally — match it before committing.
 

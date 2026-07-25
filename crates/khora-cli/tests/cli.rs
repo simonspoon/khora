@@ -647,3 +647,39 @@ fn test_reap_json_format() {
         .success()
         .stdout(predicate::str::contains("reaped"));
 }
+
+#[test]
+#[cfg(unix)]
+fn test_rust_log_diagnostics_go_to_stderr_not_stdout() {
+    // stdout is the command's result and callers pipe it (`khora eval | jq`),
+    // so tracing output must never land there. A planted session whose PID is
+    // dead makes auto-reap emit a log line without needing Chrome, which is
+    // what makes this assert on real diagnostic output rather than on silence.
+    //
+    // Unix-only because the setup redirects the sessions dir via $HOME, and
+    // `dirs::home_dir()` honours $HOME only on Linux/macOS — on Windows it
+    // reads the profile folder through SHGetKnownFolderPath, so the planted
+    // session would never be found and the assertion would fail on the
+    // windows-latest CI leg. The behaviour under test (which writer the
+    // subscriber uses) is platform-independent; only this harness is not.
+    let home = std::env::temp_dir().join(format!("khora-log-test-{}", std::process::id()));
+    let dir = home.join(".khora").join("sessions");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("deadbeef.json"),
+        r#"{"id":"deadbeef","ws_url":"ws://127.0.0.1:1/devtools/browser/x","pid":999999,"headless":true,"created_at":0}"#,
+    )
+    .unwrap();
+
+    khora()
+        .env("HOME", &home)
+        .env("RUST_LOG", "info")
+        .args(["status", "deadbeef"])
+        .assert()
+        .stderr(predicate::str::contains(
+            "auto-reaped stale session deadbeef",
+        ))
+        .stdout(predicate::str::contains("auto-reaped").not());
+
+    std::fs::remove_dir_all(&home).ok();
+}

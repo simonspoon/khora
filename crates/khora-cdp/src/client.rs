@@ -1341,6 +1341,14 @@ impl CdpClient {
             .r#type(DispatchKeyEventType::RawKeyDown)
             .build()
             .map_err(KhoraError::Cdp)?;
+        // Log what was actually put on the wire, so a page that reports a
+        // different `key`/`code` than requested can be attributed to Chrome's
+        // side of the dispatch instead of guessed at (mesa task 551 — see
+        // tests/e2e/key-wedge-soak.sh, which reads this back under RUST_LOG).
+        tracing::debug!(
+            params = %serde_json::to_string(&down).unwrap_or_default(),
+            "Input.dispatchKeyEvent rawKeyDown"
+        );
         tokio::time::timeout(
             std::time::Duration::from_millis(timeout_ms),
             page.execute(down),
@@ -1743,11 +1751,33 @@ impl CdpClient {
 
     /// Pick the page `get_or_create_page()` should operate on.
     async fn resolve_page(&self) -> KhoraResult<Page> {
-        let pages = self
+        let mut pages = self
             .browser
             .pages()
             .await
             .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+
+        // An empty target list almost always means Chrome's initial
+        // `Target.targetCreated` has not been received yet, not that the
+        // browser has no tab. Creating one here is worse than merely wasteful:
+        // khora then drives its own CDP-created tab while Chrome's startup tab
+        // (which resolves to `chrome://newtab/`) stays the active one, and a
+        // trusted `Input.dispatchKeyEvent` into a background tab arrives with
+        // its modifier bits intact but `key`/`code` stripped to
+        // `Unidentified`/`""` — the intermittent corruption in mesa task 551.
+        // So re-poll before concluding there is nothing to attach to; only a
+        // browser with genuinely no pages pays this bound.
+        if pages.is_empty() {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            while pages.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                pages = self
+                    .browser
+                    .pages()
+                    .await
+                    .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            }
+        }
 
         if pages.is_empty() {
             return self

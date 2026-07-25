@@ -478,8 +478,12 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ExitCode {
+    // Diagnostics go to stderr: stdout is the command's result, and callers
+    // pipe it (`khora eval ... | jq`). tracing_subscriber's default writer is
+    // stdout, which silently corrupts that output whenever RUST_LOG is set.
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();

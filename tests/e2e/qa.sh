@@ -69,6 +69,18 @@ assert_file() {
   fi
 }
 
+assert_eq() {
+  local label="$1" actual="$2" expected="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    printf "  ${GREEN}PASS${NC}  %s\n" "$label"
+    ((PASS++))
+  else
+    printf "  ${RED}FAIL${NC}  %s\n" "$label"
+    printf "       expected %s, got %s\n" "$expected" "$actual"
+    ((FAIL++))
+  fi
+}
+
 assert_ge() {
   local label="$1" actual="$2" minimum="$3"
   if [[ "$actual" -ge "$minimum" ]]; then
@@ -163,6 +175,19 @@ EC=$?
 assert_exit "navigate --no-cache exits 0" "$EC" 0
 assert_contains "navigate --no-cache reports bypass" "$OUTPUT" "cache bypassed"
 sleep 0.3
+
+# Regression for mesa task 551: if Chrome's initial Target.targetCreated had
+# not arrived yet, pages() came back empty and khora manufactured its own tab,
+# then drove that while Chrome's startup tab (which resolves to
+# chrome://newtab/) stayed the *active* one. Trusted key dispatch into the
+# resulting background tab silently arrives as key:Unidentified with an empty
+# code — the failure only shows up much later, in the `key` block below, and
+# only in ~7% of runs. Assert the invariant directly instead: khora drives
+# Chrome's own single tab and leaves no stray page target behind.
+DEVTOOLS_PORT=$(grep -oE '127\.0\.0\.1:[0-9]+' "$HOME/.khora/sessions/${SESSION}.json" | head -1 | cut -d: -f2)
+TARGETS=$(curl -s -m 5 "http://127.0.0.1:${DEVTOOLS_PORT}/json/list")
+assert_eq "navigate leaves exactly one page target" "$(echo "$TARGETS" | grep -c '"type": "page"')" "1"
+assert_eq "no stray new-tab page target" "$(echo "$TARGETS" | grep -c 'chrome://newtab')" "0"
 
 # ── find (single element) ───────────────────────────────
 
