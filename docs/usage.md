@@ -445,6 +445,13 @@ khora wheel "$S" 100,150 0,300     # scroll down 300px at 100,150
 khora wheel "$S" 100,150 0,-150    # scroll up
 ```
 
+`wheel` force-warms the compositor before dispatching (a capped, best-effort
+1x1 screenshot, ~30ms), because `mouseWheel` is the one trusted input event
+with no fallback when the page has no pending compositor frame — it can fail
+to ack at all rather than merely slow down. If a `wheel` still times out, the
+page being cold is no longer a likely explanation; suspect the browser itself
+and relaunch the session.
+
 ### Touch gestures
 
 `touch`, `swipe` and `long-press` dispatch trusted touch events (CDP

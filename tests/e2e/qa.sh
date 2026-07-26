@@ -158,6 +158,31 @@ OUTPUT=$("$KHORA" mouse-move "$SESSION" "10,10" 2>&1)
 EC=$?
 assert_exit "mouse-move on fresh about:blank exits 0" "$EC" 0
 
+# Same smoke check for `wheel` (mesa task 569). `mouseWheel` is the strictest
+# consumer of compositor frames — no fallback, so a cold page can hang it for
+# the full timeout rather than merely taxing it — and it was the only trusted-
+# input method not force-warming a frame first. It now does, matching
+# mouse_move/drag/swipe/key_press.
+#
+# Read this with the same caveat as the check above: the cold-page hang did
+# NOT reproduce live here (40 timed cold launches on the pre-fix binary — 20
+# launch->navigate->wheel, 20 launch->wheel — all green in 0.22-0.68s), so
+# this asserts the command still works on a never-painted tab, NOT that it
+# catches the hang. It would fail if the added nudge itself wedged or errored
+# on a blank page, which is the new risk the fix introduces.
+START=$(date +%s)
+OUTPUT=$("$KHORA" wheel "$SESSION" "10,10" "0,10" 2>&1)
+EC=$?
+ELAPSED=$(($(date +%s) - START))
+assert_exit "wheel on fresh about:blank exits 0" "$EC" 0
+if [ "$ELAPSED" -lt 10 ]; then
+  printf "  ${GREEN}PASS${NC}  wheel on fresh about:blank stayed fast (${ELAPSED}s)\n"
+  ((PASS++))
+else
+  printf "  ${RED}FAIL${NC}  wheel on fresh about:blank took ${ELAPSED}s\n"
+  ((FAIL++))
+fi
+
 # ── navigate ─────────────────────────────────────────────
 
 printf "\n${BOLD}▸ navigate${NC}\n"

@@ -1338,6 +1338,18 @@ impl CdpClient {
         timeout_ms: u64,
     ) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
+        // `mouseWheel` is the strictest consumer of compositor frames: unlike
+        // `mousePressed`/`mouseReleased` (which need none) and `mouseMoved`
+        // (which degrades but retries), it has no fallback — dispatched into a
+        // page with no pending frame it can fail to ack at all, hanging until
+        // the caller's timeout. Every other trusted-input method already
+        // nudges a frame; this one did not, which is the asymmetry mesa task
+        // 569 reported. Preventive and best-effort, same reasoning as
+        // `mouse_move()`/`drag()` — and, like theirs, defense-in-depth rather
+        // than a fix for a locally reproduced hang: 40 cold launches (20
+        // launch->navigate->wheel, 20 launch->wheel) were all green before
+        // this call was added.
+        self.force_compositor_frame(&page).await;
         let event = DispatchMouseEventParams::builder()
             .r#type(DispatchMouseEventType::MouseWheel)
             .x(at.0)
