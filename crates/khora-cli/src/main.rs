@@ -351,6 +351,57 @@ enum Command {
         delta: Point,
     },
 
+    /// Tap at a raw viewport point with trusted touch events (CDP Input.dispatchTouchEvent)
+    ///
+    /// Unlike `click-at`, this produces real TouchEvents — for touch-only
+    /// handlers and the pointer sequence a phone generates, which the mouse
+    /// path never takes.
+    Touch {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+    },
+
+    /// Swipe between two points with trusted touch events (CDP Input.dispatchTouchEvent)
+    ///
+    /// The only way to exercise `touch-action`, which governs touch panning
+    /// exclusively: a trusted `wheel` can't reach it, and synthetic
+    /// TouchEvents from `eval` never enter Chromium's scroll pipeline.
+    Swipe {
+        /// Session ID
+        session: String,
+        /// Start point as X,Y in viewport CSS pixels (e.g. 200,600)
+        #[arg(allow_hyphen_values = true)]
+        from: Point,
+        /// End point as X,Y in viewport CSS pixels
+        #[arg(allow_hyphen_values = true)]
+        to: Point,
+        /// Number of intermediate touch-move events along the path
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
+        steps: u32,
+        /// Delay between touch events in milliseconds
+        #[arg(long, default_value_t = 16)]
+        delay: u64,
+    },
+
+    /// Press and hold at a point with trusted touch events, then release
+    ///
+    /// For press-and-hold gestures a tap can't reach (context menus, drag
+    /// activation delays), which start a timer on `touchstart` that an early
+    /// `touchend` cancels — so the hold has to be a real wait.
+    LongPress {
+        /// Session ID
+        session: String,
+        /// Point as X,Y in viewport CSS pixels (e.g. 100,250)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+        /// How long to hold the touch down, in milliseconds
+        #[arg(long, default_value_t = 600)]
+        duration: u64,
+    },
+
     /// Press a key combo with a trusted key event (CDP Input.dispatchKeyEvent)
     ///
     /// For modifier shortcuts (Cmd+D, Cmd+S, Ctrl+Shift+I, ...) that
@@ -885,6 +936,69 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     "action": "wheel",
                     "at": { "x": at.x, "y": at.y },
                     "delta": { "x": delta.x, "y": delta.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Touch { session, at } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client.touch((at.x, at.y), cli.timeout).await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Tapped at: {at}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "touch",
+                    "at": { "x": at.x, "y": at.y },
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::Swipe {
+            session,
+            from,
+            to,
+            steps,
+            delay,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client
+                .swipe((from.x, from.y), (to.x, to.y), *steps, *delay, cli.timeout)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Swiped: {from} -> {to}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "swipe",
+                    "from": { "x": from.x, "y": from.y },
+                    "to": { "x": to.x, "y": to.y },
+                    "steps": steps,
+                    "delay_ms": delay,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::LongPress {
+            session,
+            at,
+            duration,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client
+                .long_press((at.x, at.y), *duration, cli.timeout)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Long-pressed at: {at} for {duration}ms")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "long-press",
+                    "at": { "x": at.x, "y": at.y },
+                    "duration_ms": duration,
                 }))
                 .unwrap()),
             }

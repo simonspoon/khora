@@ -409,6 +409,70 @@ khora wheel "$S" 100,150 0,300     # scroll down 300px at 100,150
 khora wheel "$S" 100,150 0,-150    # scroll up
 ```
 
+### Touch gestures
+
+`touch`, `swipe` and `long-press` dispatch trusted touch events (CDP
+`Input.dispatchTouchEvent`). They are not a stylistic alternative to the mouse
+commands — they reach behavior the mouse path structurally cannot:
+
+- **`touch-action` is a touch-only property.** It governs which panning
+  gestures the compositor may take over, and only ever consults *touch*. A
+  trusted `wheel` therefore cannot verify it, and a synthetic `TouchEvent`
+  dispatched from `eval` never enters the scroll pipeline at all — it fires
+  listeners while `scrollTop` stays put.
+- **Touch-only handlers.** A component listening for `touchstart`/`touchmove`
+  (mobile carousels, pull-to-refresh, dnd-kit's `TouchSensor`) sees nothing
+  from a click.
+- **`pointerType`.** Pointer events derived from a tap report
+  `pointerType: "touch"`; the mouse path reports `"mouse"`, which gesture
+  libraries routinely branch on.
+
+```bash
+khora touch "$S" 150,220                        # tap
+khora swipe "$S" 200,600 200,200                # swipe up (--steps, --delay)
+khora long-press "$S" 150,220 --duration 800    # press and hold, then release
+```
+
+A tap produces the full sequence a phone does — `touchstart`/`touchend`,
+`pointerdown`/`pointerup`, the compatibility `mousedown`/`mouseup`, then
+`click` — all trusted. `long-press` holds for real time, so it trips the
+`setTimeout` armed on `touchstart` that drag-activation delays and context
+menus use, which a tap cancels.
+
+Verifying a phone layout end to end usually means pairing these with
+`set-viewport`:
+
+```bash
+khora set-viewport "$S" 390x844 3 --mobile
+khora swipe "$S" 200,600 200,200
+khora eval "$S" 'document.querySelector(".board").scrollTop'
+```
+
+**Coordinates are raw viewport points**, so a target below the fold receives a
+dispatch into empty space — and that still exits 0, leaving the page untouched
+while every later assertion reads as a silent failure. Scroll the element into
+view and measure it in the *same* `eval`, since a later scroll invalidates an
+earlier measurement:
+
+```bash
+P=$(khora eval "$S" '(function(){var e=document.querySelector(".card");
+  e.scrollIntoView({block:"center"});var r=e.getBoundingClientRect();
+  return Math.round(r.x+r.width/2)+","+Math.round(r.y+r.height/2)})()')
+khora touch "$S" "$P"
+```
+
+**Known limitation.** These commands do not turn on CDP touch *emulation*
+(`Emulation.setTouchEmulationEnabled`), because it buys nothing here:
+dispatch, native panning and `pointerType` are identical with and without it,
+and Chrome reverts the override when the CDP client disconnects — which khora
+does after every command — so it could never survive to be read by the next
+one anyway. The consequence is that a page's **load-time feature detection**
+still reports a non-touch device: `'ontouchstart' in window` is `false`,
+`navigator.maxTouchPoints` is `0`, and `(pointer: coarse)` does not match. An
+app that registers touch handlers only behind such a check won't have any for
+these events to reach. Apps that always attach touch listeners (the common
+case, including dnd-kit) are unaffected.
+
 ### Screenshot comparison
 
 ```bash

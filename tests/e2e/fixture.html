@@ -89,6 +89,26 @@
   </div>
   <div id="wheel-result"></div>
 
+  <!-- touch tests. The pan-y/pan-x pair is a differential: an identical
+       vertical swipe must scroll the first and leave the second at 0, which
+       is what proves Chromium is honoring `touch-action` rather than khora
+       merely moving pixels. `touch-action` governs TOUCH panning only, so
+       neither box is reachable by a trusted wheel. -->
+  <div id="touch-pany" style="width: 200px; height: 150px; overflow-y: auto; touch-action: pan-y;">
+    <div style="height: 1200px;">pan-y content</div>
+  </div>
+  <div id="touch-panx" style="width: 200px; height: 150px; overflow-y: auto; touch-action: pan-x;">
+    <div style="height: 1200px;">pan-x content</div>
+  </div>
+
+  <!-- tap / long-press targets: record the touch and pointer sequence so a
+       tap can be told apart from a click, and a held touch from a tap. -->
+  <div id="touch-target" style="width: 200px; height: 100px; background: #eef; touch-action: none;">
+    tap me
+  </div>
+  <div id="touch-result"></div>
+  <div id="longpress-result">longpress: no</div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -239,6 +259,38 @@
     document.getElementById('scroll-inner').addEventListener('wheel', function(e) {
       document.getElementById('wheel-result').textContent = 'wheel trusted:' + e.isTrusted;
     });
+
+    // Touch tests: record the touch/pointer sequence a tap produces, so a
+    // trusted tap can be distinguished from a trusted click (which fires no
+    // TouchEvent at all and reports pointerType 'mouse').
+    (function() {
+      var target = document.getElementById('touch-target');
+      var seen = [];
+      var pointerType = '';
+      ['touchstart', 'touchend'].forEach(function(t) {
+        target.addEventListener(t, function(e) {
+          seen.push(t + ':' + e.isTrusted);
+          document.getElementById('touch-result').textContent = 'touch:' + seen.join(',');
+        }, { passive: true });
+      });
+      target.addEventListener('pointerdown', function(e) {
+        pointerType = e.pointerType;
+        document.getElementById('touch-result').dataset.pointerType = pointerType;
+      });
+
+      // Long-press: a timer armed on touchstart that an early touchend
+      // cancels — the same shape drag-activation delays and context menus
+      // use, so it only reports yes if the hold was a real wait.
+      var timer = null;
+      target.addEventListener('touchstart', function() {
+        timer = setTimeout(function() {
+          document.getElementById('longpress-result').textContent = 'longpress: yes';
+        }, 400);
+      }, { passive: true });
+      target.addEventListener('touchend', function() {
+        clearTimeout(timer);
+      }, { passive: true });
+    })();
 
     // React-style value tracking: shadow the native setter on the instance,
     // and only report a change when the underlying native value diverges

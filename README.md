@@ -91,6 +91,9 @@ khora launch --window-size 1366x768
 | `dblclick-at <session> <at>` | Double-click at raw viewport point `X,Y` with trusted mouse events |
 | `key <session> <combo>` | Press a trusted key combo, e.g. `Cmd+D`, `Ctrl+Shift+I`, `Escape` |
 | `wheel <session> <at> <delta>` | Scroll with a trusted native wheel event at `X,Y` by `dX,dY` CSS pixels |
+| `touch <session> <at>` | Tap at raw viewport point `X,Y` with trusted touch events — real `TouchEvent`s and `pointerType: touch`, which `click-at` never produces |
+| `swipe <session> <from> <to>` | Swipe between `X,Y` points with trusted touch events (`--steps`, `--delay` ms). The only way to exercise `touch-action`, which governs touch panning exclusively — `wheel` can't reach it |
+| `long-press <session> <at>` | Hold a touch at `X,Y` then release (`--duration` ms, default 600) — for context menus and drag-activation delays |
 | `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element, `--clip X,Y,WxH` for an explicit region |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

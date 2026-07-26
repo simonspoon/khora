@@ -4,7 +4,7 @@ use chromiumoxide::cdp::browser_protocol::emulation::{
 };
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
-    MouseButton,
+    DispatchTouchEventReturns, DispatchTouchEventType, MouseButton, TouchPoint,
 };
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
@@ -23,6 +23,45 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::chrome::find_chrome;
+
+/// `Input.dispatchTouchEvent` params that always put `touchPoints` on the
+/// wire.
+///
+/// chromiumoxide's generated `DispatchTouchEventParams` marks that field
+/// `skip_serializing_if = "Vec::is_empty"`, but CDP requires the parameter
+/// and defines `touchEnd`/`touchCancel` as carrying *no* points — so the
+/// release closing every gesture serialized with the field missing entirely
+/// and came back `-32602 Invalid parameters` (measured against Chrome, not
+/// inferred: the touchStart and touchMoves of the same swipe all landed and
+/// scrolled the page, only the release failed). Reusing the generated event
+/// type and response keeps this to a serialization override.
+#[derive(Debug, serde::Serialize)]
+struct DispatchTouchEvent {
+    #[serde(rename = "type")]
+    kind: DispatchTouchEventType,
+    #[serde(rename = "touchPoints")]
+    touch_points: Vec<TouchPoint>,
+}
+
+impl DispatchTouchEvent {
+    const IDENTIFIER: &'static str = "Input.dispatchTouchEvent";
+}
+
+impl chromiumoxide::Method for DispatchTouchEvent {
+    fn identifier(&self) -> chromiumoxide::types::MethodId {
+        Self::IDENTIFIER.into()
+    }
+}
+
+impl chromiumoxide::MethodType for DispatchTouchEvent {
+    fn method_id() -> chromiumoxide::types::MethodId {
+        Self::IDENTIFIER.into()
+    }
+}
+
+impl chromiumoxide::Command for DispatchTouchEvent {
+    type Response = DispatchTouchEventReturns;
+}
 
 /// High-level CDP client wrapping chromiumoxide Browser.
 pub struct CdpClient {
@@ -1304,6 +1343,164 @@ impl CdpClient {
         .map_err(|_| KhoraError::Timeout(timeout_ms))?
         .map_err(|e| KhoraError::Cdp(e.to_string()))?;
         Ok(())
+    }
+
+    /// Dispatch a single trusted touch event (CDP Input.dispatchTouchEvent).
+    ///
+    /// `points` carries the touch points still active *after* this event, so
+    /// `TouchStart`/`TouchMove` need exactly one (khora drives a single
+    /// finger) and `TouchEnd`/`TouchCancel` must carry none — CDP rejects the
+    /// combination the other way round.
+    async fn dispatch_touch_event(
+        &self,
+        page: &Page,
+        kind: DispatchTouchEventType,
+        points: Vec<TouchPoint>,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let event = DispatchTouchEvent {
+            kind,
+            touch_points: points,
+        };
+        tracing::debug!(
+            params = %serde_json::to_string(&event).unwrap_or_default(),
+            "Input.dispatchTouchEvent"
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            page.execute(event),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        Ok(())
+    }
+
+    /// The single finger khora dispatches, at a viewport point.
+    ///
+    /// The `id` is pinned so every event in a gesture describes the same
+    /// touch source; Chromium tracks a finger across start/move/end by that
+    /// id, and letting it default would make each move look like a new one.
+    fn finger(at: (f64, f64)) -> TouchPoint {
+        let mut point = TouchPoint::new(at.0, at.1);
+        point.id = Some(0.0);
+        point
+    }
+
+    /// Tap at a viewport point with trusted touch events (touchStart then
+    /// touchEnd).
+    ///
+    /// Distinct from [`Self::click_at`]: a tap produces real `TouchEvent`s,
+    /// so it drives touch-only handlers, and the pointer events it derives
+    /// report `pointerType: "touch"` where the mouse path reports `mouse`.
+    /// The full compatibility sequence a phone produces follows
+    /// (`pointerdown`/`pointerup`, `mousedown`/`mouseup`, `click`), all
+    /// `isTrusted` — verified live, see `tests/e2e/qa.sh`.
+    ///
+    /// Note that none of the touch commands turn on CDP touch *emulation*
+    /// (`Emulation.setTouchEmulationEnabled`), because measurement showed it
+    /// buys nothing here: dispatch, native panning and `pointerType` are
+    /// identical with and without it, and — since khora reconnects per
+    /// command and Chrome reverts the override on disconnect — it cannot
+    /// survive to be read by a later command anyway. The consequence is that
+    /// a page's *load-time* feature detection (`'ontouchstart' in window`,
+    /// `navigator.maxTouchPoints`, `(pointer: coarse)`) still reports a
+    /// non-touch device, so an app that registers touch handlers only behind
+    /// such a check won't have any for these events to reach.
+    pub async fn touch(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_touch_event(
+            &page,
+            DispatchTouchEventType::TouchStart,
+            vec![Self::finger(at)],
+            timeout_ms,
+        )
+        .await?;
+        self.dispatch_touch_event(&page, DispatchTouchEventType::TouchEnd, vec![], timeout_ms)
+            .await
+    }
+
+    /// Swipe from one viewport point to another with trusted touch events
+    /// (touchStart, interpolated touchMoves, touchEnd).
+    ///
+    /// This is the only way to exercise `touch-action`: that property governs
+    /// *touch* panning exclusively, so a trusted `wheel` cannot reach it and
+    /// synthetic `TouchEvent`s dispatched from `eval` never enter Chromium's
+    /// scroll pipeline at all. Like [`Self::drag`], `steps` events are spread
+    /// evenly along the line ending exactly at `to`, with `delay_ms` between
+    /// them so frameworks batching on animation frames observe the motion —
+    /// and gesture recognizers that discriminate by velocity see a plausible
+    /// one.
+    ///
+    /// Chromium honors the axis restriction, not merely the motion: the same
+    /// vertical swipe scrolls a `touch-action: pan-y` container and leaves an
+    /// otherwise-identical `pan-x` one at `scrollTop` 0 (measured; both cases
+    /// are asserted in `tests/e2e/qa.sh`).
+    pub async fn swipe(
+        &self,
+        from: (f64, f64),
+        to: (f64, f64),
+        steps: u32,
+        delay_ms: u64,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let delay = std::time::Duration::from_millis(delay_ms);
+        // Same never-painted-page hit-test tax the interpolated moves in
+        // drag() pay; force a frame once up front for the same reason.
+        self.force_compositor_frame(&page).await;
+
+        self.dispatch_touch_event(
+            &page,
+            DispatchTouchEventType::TouchStart,
+            vec![Self::finger(from)],
+            timeout_ms,
+        )
+        .await?;
+
+        for i in 1..=steps {
+            tokio::time::sleep(delay).await;
+            let t = f64::from(i) / f64::from(steps);
+            let x = from.0 + (to.0 - from.0) * t;
+            let y = from.1 + (to.1 - from.1) * t;
+            self.dispatch_touch_event(
+                &page,
+                DispatchTouchEventType::TouchMove,
+                vec![Self::finger((x, y))],
+                timeout_ms,
+            )
+            .await?;
+        }
+
+        tokio::time::sleep(delay).await;
+        self.dispatch_touch_event(&page, DispatchTouchEventType::TouchEnd, vec![], timeout_ms)
+            .await
+    }
+
+    /// Hold a touch at a viewport point for `duration_ms`, then release
+    /// (touchStart, wait, touchEnd).
+    ///
+    /// For the press-and-hold gestures a tap can't reach — context menus,
+    /// dnd-kit's `TouchSensor` activation delay, reorder handles — which are
+    /// implemented as a timer started on `touchstart` and cancelled by an
+    /// early `touchend`, so the wait has to be real.
+    pub async fn long_press(
+        &self,
+        at: (f64, f64),
+        duration_ms: u64,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        self.dispatch_touch_event(
+            &page,
+            DispatchTouchEventType::TouchStart,
+            vec![Self::finger(at)],
+            timeout_ms,
+        )
+        .await?;
+        tokio::time::sleep(std::time::Duration::from_millis(duration_ms)).await;
+        self.dispatch_touch_event(&page, DispatchTouchEventType::TouchEnd, vec![], timeout_ms)
+            .await
     }
 
     /// Press a `+`-separated key combo (e.g. `Cmd+D`, `Ctrl+Shift+I`,

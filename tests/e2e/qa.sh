@@ -405,6 +405,77 @@ assert_ge "wheel drove real native scroll" "$INNER_SCROLL" 1
 OUTER_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('scroll-outer').scrollTop" 2>&1)
 assert_contains "wheel scroll did not chain past contain boundary" "$OUTER_SCROLL" "0"
 
+# ── touch / swipe / long-press ───────────────────────────
+
+# Trusted input is dispatched at raw *viewport* coordinates, so a target
+# below the fold gets a dispatch into empty space — which still exits 0 and
+# leaves every downstream assert reading an untouched page. The fixture's
+# touch elements sit ~1020px down a 600px-tall headless viewport, so scroll
+# each into view first and read its rect afterwards. Scrolling and measuring
+# must happen in the same eval; splitting them lets a later scroll invalidate
+# an earlier measurement.
+touch_point() {  # $1 = element id, $2 = fraction of the element's height
+  "$KHORA" eval "$SESSION" "(function(){var e=document.getElementById('$1');e.scrollIntoView({block:'center'});var r=e.getBoundingClientRect();return Math.round(r.x+r.width/2)+','+Math.round(r.y+r.height*$2)})()" 2>&1
+}
+
+printf "\n${BOLD}▸ touch${NC}\n"
+TOUCH_POINT=$(touch_point touch-target 0.5)
+
+OUTPUT=$("$KHORA" touch "$SESSION" "$TOUCH_POINT" 2>&1)
+EC=$?
+assert_exit "touch exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#touch-result" 2>&1)
+assert_contains "touch fires a trusted touchstart" "$OUTPUT" "touchstart:true"
+# The release is the half that regressed first: chromiumoxide's generated
+# params drop an empty `touchPoints`, which CDP rejects (-32602), so a
+# gesture could start and move but never end. Assert it explicitly.
+assert_contains "touch fires a trusted touchend" "$OUTPUT" "touchend:true"
+
+OUTPUT=$("$KHORA" eval "$SESSION" "document.getElementById('touch-result').dataset.pointerType" 2>&1)
+assert_contains "touch reports pointerType touch, not mouse" "$OUTPUT" "touch"
+
+printf "\n${BOLD}▸ swipe${NC}\n"
+PANY_POINT=$(touch_point touch-pany 0.8)
+PANY_END=$(touch_point touch-pany 0.2)
+
+OUTPUT=$("$KHORA" swipe "$SESSION" "$PANY_POINT" "$PANY_END" 2>&1)
+EC=$?
+assert_exit "swipe exits 0" "$EC" 0
+
+PANY_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('touch-pany').scrollTop" 2>&1)
+assert_ge "swipe drove real native touch panning on touch-action: pan-y" "$PANY_SCROLL" 1
+
+# The differential half: the same vertical swipe on a pan-x container must
+# NOT scroll. Without this, a passing pan-y assert only shows that something
+# scrolled — not that Chromium honored `touch-action` at all, which is the
+# property `wheel` structurally cannot verify (mesa task 555).
+PANX_POINT=$(touch_point touch-panx 0.8)
+PANX_END=$(touch_point touch-panx 0.2)
+"$KHORA" swipe "$SESSION" "$PANX_POINT" "$PANX_END" > /dev/null 2>&1
+PANX_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('touch-panx').scrollTop" 2>&1)
+# Exact match, not a substring: the broken case measures ~95, and "95"
+# contains no "0" today — but a regression landing at 90/100/105 would slip
+# straight through a contains-check on an assert whose whole job is to prove
+# nothing moved.
+assert_eq "vertical swipe did not pan a touch-action: pan-x container" "$PANX_SCROLL" "0"
+
+printf "\n${BOLD}▸ long-press${NC}\n"
+# The tap above armed and cancelled the same 400ms timer, so a stale 'yes'
+# here would be a false pass — confirm it is still 'no' before holding.
+OUTPUT=$("$KHORA" text "$SESSION" "#longpress-result" 2>&1)
+assert_contains "tap did not trip the long-press timer" "$OUTPUT" "longpress: no"
+
+# Re-measure: the swipes above scrolled the document to reach the pan-x box,
+# so the tap's coordinates no longer point at #touch-target.
+TOUCH_POINT=$(touch_point touch-target 0.5)
+OUTPUT=$("$KHORA" long-press "$SESSION" "$TOUCH_POINT" --duration 600 2>&1)
+EC=$?
+assert_exit "long-press exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#longpress-result" 2>&1)
+assert_contains "long-press held past the activation delay" "$OUTPUT" "longpress: yes"
+
 # ── key ──────────────────────────────────────────────────
 
 printf "\n${BOLD}▸ key${NC}\n"

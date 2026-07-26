@@ -336,6 +336,106 @@ fn test_wheel_rejects_invalid_delta() {
 }
 
 #[test]
+fn test_touch_help() {
+    khora()
+        .args(["touch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted touch events"));
+}
+
+#[test]
+fn test_touch_nonexistent_session() {
+    khora()
+        .args(["touch", "nonexistent_xyz", "10,20"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_touch_rejects_invalid_point() {
+    khora()
+        .args(["touch", "nonexistent_xyz", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+#[test]
+fn test_swipe_help() {
+    khora()
+        .args(["swipe", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("touch-action"));
+}
+
+#[test]
+fn test_swipe_nonexistent_session() {
+    khora()
+        .args(["swipe", "nonexistent_xyz", "10,20", "10,5"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_swipe_rejects_invalid_point() {
+    khora()
+        .args(["swipe", "nonexistent_xyz", "abc", "10,5"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("X,Y"));
+}
+
+/// Swiping content into view above the fold means a negative Y endpoint, and
+/// clap parses a leading `-` as a flag unless the argument opts out. Asserted
+/// at the CLI layer on purpose: a parser-level test would pass while the
+/// shipped command still died at argument parsing.
+#[test]
+fn test_swipe_accepts_negative_coordinates() {
+    khora()
+        .args(["swipe", "nonexistent_xyz", "200,600", "-40,-100"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_long_press_help() {
+    khora()
+        .args(["long-press", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("trusted touch events"));
+}
+
+#[test]
+fn test_long_press_nonexistent_session() {
+    khora()
+        .args(["long-press", "nonexistent_xyz", "10,20"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_long_press_rejects_invalid_duration() {
+    khora()
+        .args([
+            "long-press",
+            "nonexistent_xyz",
+            "10,20",
+            "--duration",
+            "abc",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--duration"));
+}
+
+#[test]
 fn test_key_help() {
     khora()
         .args(["key", "--help"])
