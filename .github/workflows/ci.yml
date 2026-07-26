@@ -13,7 +13,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      # Full history + tags: build.rs stamps --version from `git describe`, and
+      # the default shallow checkout has no tags — which would silently reduce
+      # the post-tag marker test to a no-op instead of failing it.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
