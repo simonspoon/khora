@@ -124,7 +124,10 @@ impl std::fmt::Display for ClipRect {
 #[command(
     name = "khora",
     about = "Web app QA automation via Chrome DevTools Protocol",
-    version
+    // Not clap's default `version` (the bare `CARGO_PKG_VERSION`): a build made
+    // past the release tag carries a `+<commits>.g<sha>` marker so a version
+    // read cannot understate the binary's command surface. See `build.rs`.
+    version = env!("KHORA_BUILD_VERSION")
 )]
 struct Cli {
     #[arg(

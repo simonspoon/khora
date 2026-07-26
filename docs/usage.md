@@ -16,6 +16,28 @@ cd khora
 cargo install --path crates/khora-cli
 ```
 
+### Identifying a build
+
+`khora --version` reports the release version plus, on any build made past that
+release's tag, a marker naming how far past and which commit:
+
+```bash
+khora --version
+# khora 0.3.17              <- a release build, exactly on tag v0.3.17
+# khora 0.3.17+13.g6114093  <- 13 commits past v0.3.17, built at 6114093
+```
+
+The marker exists so a version read cannot understate the binary. Without it, a
+source build carrying commands added after the last release still reported only
+that release, and the only way to see the real surface was `khora --help`.
+
+A build with no git checkout behind it — the Homebrew bottle, a crates.io
+install, a release tarball — reports the bare version, which is accurate there
+because those are cut from a tag.
+
+`--version` dates a build; it does not enumerate it. For the exact commands and
+flags a binary has, `khora --help` and `khora <cmd> --help` remain authoritative.
+
 ## Chrome setup
 
 Khora auto-detects Chrome/Chromium:

@@ -35,6 +35,8 @@ Chrome DevTools Protocol integration:
 CLI entry point:
 
 - `main.rs` — clap Parser/Subcommand, dispatches to CdpClient methods
+- `build.rs` — stamps `KHORA_BUILD_VERSION` (read by `main.rs`'s `#[command(version = ...)]`) from `git describe --tags --always --long`, so a build past the release tag reports `0.3.17+<commits>.g<sha>` rather than understating itself as `0.3.17`. Emits `rerun-if-changed` for the git dir's `HEAD` and `logs/HEAD` plus the common dir's `packed-refs` and `refs/tags`, so cargo cannot serve a stale stamp. Degrades to the bare package version when git is absent (a tarball build).
+- `build_version.rs` — the pure rendering/parsing of that string, `include!`d by `build.rs` and by `tests/cli.rs` (a build script cannot depend on its own crate)
 
 ## Session lifecycle
 

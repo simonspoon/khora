@@ -42,3 +42,5 @@ Read `docs/architecture.md` first — it is the source of truth for crate layout
 ## Releases
 
 Version is set once in `[workspace.package]` in the root `Cargo.toml`. Bump it there; the release workflow (`.github/workflows/release.yml`) and Homebrew tap (`brew install simonspoon/tap/khora`) build from tags.
+
+`khora --version` is **not** the bare `CARGO_PKG_VERSION`. `crates/khora-cli/build.rs` stamps `KHORA_BUILD_VERSION` from `git describe --tags --always --long`: a build sitting on its release tag reports `0.3.17`, and anything past it reports `0.3.17+<commits>.g<sha>`. That marker exists so a version read cannot understate the binary — a build carrying post-tag commands used to report only the last tag, and capability had to be read off `--help` instead. A build with no git (a crates.io or Homebrew tarball) reports the bare version, which is correct there since those are cut from a tag. The rendering lives in `crates/khora-cli/build_version.rs`, `include!`d by both the build script and the CLI tests.

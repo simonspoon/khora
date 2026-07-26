@@ -1,8 +1,27 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 
+// The version-string renderer `build.rs` stamps into the binary. A build script
+// cannot depend on its own crate, so both sides `include!` the same file.
+include!("../build_version.rs");
+
 fn khora() -> Command {
     Command::cargo_bin("khora").unwrap()
+}
+
+/// `git describe --tags --always --long` for the package, as `build.rs` ran it,
+/// or `None` when this is not a checkout (a tarball build).
+fn git_describe() -> Option<String> {
+    let out = std::process::Command::new("git")
+        .args(["describe", "--tags", "--always", "--long"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (!s.is_empty()).then_some(s)
 }
 
 #[test]
@@ -20,7 +39,87 @@ fn test_version() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::contains("khora"));
+        .stdout(predicate::str::starts_with(format!(
+            "khora {}",
+            env!("CARGO_PKG_VERSION")
+        )));
+}
+
+/// The binary's stamp must match the git state it was built from — that is the
+/// whole claim, and it is what makes a version read a usable capability signal.
+#[test]
+fn test_version_matches_git_describe() {
+    let Some(describe) = git_describe() else {
+        return; // not a checkout; nothing to compare the stamp against
+    };
+    let expected = build_version(env!("CARGO_PKG_VERSION"), Some(&describe));
+    khora()
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicate::eq(format!("khora {expected}\n")));
+}
+
+/// A build made past the release tag must not report the bare package version.
+/// This is the understatement the marker exists to prevent: `khora 0.3.17` on a
+/// binary carrying thirteen commits' worth of extra commands.
+#[test]
+fn test_version_marks_post_tag_builds() {
+    let Some(describe) = git_describe() else {
+        return;
+    };
+    let Some((commits, _)) = parse_describe_long(&describe) else {
+        return; // no tag reachable from HEAD (a shallow CI checkout)
+    };
+    if commits == 0 {
+        return; // exactly on a release tag: a bare version is correct
+    }
+    let out = khora().arg("--version").output().unwrap();
+    let reported = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert_ne!(
+        reported,
+        format!("khora {}", env!("CARGO_PKG_VERSION")),
+        "{commits} commits past the tag, but --version reports the bare package version"
+    );
+    assert!(
+        reported.contains(&format!("+{commits}.g")),
+        "expected a +<commits>.g<sha> marker, got: {reported}"
+    );
+}
+
+#[test]
+fn test_build_version_on_tag_is_bare() {
+    assert_eq!(
+        build_version("0.3.17", Some("v0.3.17-0-g830d5cb")),
+        "0.3.17"
+    );
+}
+
+#[test]
+fn test_build_version_past_tag_carries_marker() {
+    assert_eq!(
+        build_version("0.3.17", Some("v0.3.17-13-g6114093")),
+        "0.3.17+13.g6114093"
+    );
+}
+
+#[test]
+fn test_build_version_tolerates_hyphenated_tag() {
+    assert_eq!(
+        build_version("1.0.0", Some("v1.0.0-rc1-3-gabc1234")),
+        "1.0.0+3.gabc1234"
+    );
+}
+
+#[test]
+fn test_build_version_without_tags_uses_bare_sha() {
+    assert_eq!(build_version("0.3.17", Some("2153033")), "0.3.17+2153033");
+}
+
+#[test]
+fn test_build_version_without_git_is_bare() {
+    assert_eq!(build_version("0.3.17", None), "0.3.17");
+    assert_eq!(build_version("0.3.17", Some("  ")), "0.3.17");
 }
 
 #[test]

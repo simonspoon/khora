@@ -24,6 +24,19 @@ git clone https://github.com/simonspoon/khora && cd khora
 ./install.sh --prefix /usr/local # -> /usr/local/bin/khora
 ```
 
+### Which build am I running?
+
+```bash
+khora --version
+# khora 0.3.17              <- a release build, exactly on its tag
+# khora 0.3.17+13.g6114093  <- built 13 commits past v0.3.17, at 6114093
+```
+
+A build made past the last release tag says so, so a version read never
+understates what the binary can do. Use it to tell a source build apart from
+the release it was cut from; `khora --help` and `khora <cmd> --help` remain the
+authority on the exact command surface.
+
 ## Quick start
 
 ```bash
