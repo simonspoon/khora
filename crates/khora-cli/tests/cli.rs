@@ -403,6 +403,100 @@ fn test_swipe_accepts_negative_coordinates() {
 }
 
 #[test]
+fn test_pinch_help() {
+    khora()
+        .args(["pinch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("two fingers"));
+}
+
+#[test]
+fn test_pinch_nonexistent_session() {
+    khora()
+        .args([
+            "pinch",
+            "nonexistent_xyz",
+            "400,300",
+            "--from",
+            "100",
+            "--to",
+            "300",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+/// Both gaps are required — a pinch with only one end of the range named has
+/// no motion to interpolate, and defaulting the other would invent a gesture
+/// the caller did not ask for.
+#[test]
+fn test_pinch_requires_both_gaps() {
+    khora()
+        .args(["pinch", "nonexistent_xyz", "400,300", "--from", "100"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--to"));
+}
+
+/// Asserted at the CLI layer, not against `parse_gap`: clap decides how
+/// `--from -10` is tokenized before any value parser sees it, so only a
+/// process-level test proves a negative gap is actually unreachable.
+#[test]
+fn test_pinch_rejects_negative_gap() {
+    khora()
+        .args([
+            "pinch",
+            "nonexistent_xyz",
+            "400,300",
+            "--from",
+            "-10",
+            "--to",
+            "300",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found").not());
+}
+
+#[test]
+fn test_pinch_rejects_invalid_gap() {
+    khora()
+        .args([
+            "pinch",
+            "nonexistent_xyz",
+            "400,300",
+            "--from",
+            "abc",
+            "--to",
+            "300",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--from"));
+}
+
+#[test]
+fn test_pinch_rejects_zero_steps() {
+    khora()
+        .args([
+            "pinch",
+            "nonexistent_xyz",
+            "400,300",
+            "--from",
+            "100",
+            "--to",
+            "300",
+            "--steps",
+            "0",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--steps"));
+}
+
+#[test]
 fn test_long_press_help() {
     khora()
         .args(["long-press", "--help"])

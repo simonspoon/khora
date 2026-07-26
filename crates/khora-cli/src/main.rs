@@ -60,6 +60,19 @@ impl std::fmt::Display for Point {
     }
 }
 
+/// A finger separation for `pinch`, in CSS pixels.
+///
+/// Negative is rejected rather than normalized: it would put the left finger
+/// to the right of the right one, which is a crossed-hands gesture nobody
+/// means to ask for.
+fn parse_gap(s: &str) -> Result<f64, String> {
+    let gap: f64 = s.trim().parse().map_err(|_| format!("invalid gap: {s}"))?;
+    if !gap.is_finite() || gap < 0.0 {
+        return Err(format!("gap must be finite and >= 0, got: {s}"));
+    }
+    Ok(gap)
+}
+
 /// A screenshot clip region in page CSS pixels: `X,Y,WxH`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ClipRect {
@@ -412,6 +425,32 @@ enum Command {
         #[arg(allow_hyphen_values = true)]
         to: Point,
         /// Number of intermediate touch-move events along the path
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
+        steps: u32,
+        /// Delay between touch events in milliseconds
+        #[arg(long, default_value_t = 16)]
+        delay: u64,
+    },
+
+    /// Pinch two fingers around a point, spreading or squeezing the gap
+    /// between them (CDP Input.dispatchTouchEvent)
+    ///
+    /// `swipe` dispatches a single contact, so pinch-zoom — defined by the
+    /// distance between two — is out of its reach. The fingers sit `gap / 2`
+    /// either side of the point on the horizontal axis.
+    Pinch {
+        /// Session ID
+        session: String,
+        /// Center point as X,Y in viewport CSS pixels (e.g. 400,300)
+        #[arg(allow_hyphen_values = true)]
+        at: Point,
+        /// Starting gap between the two fingers, in CSS pixels
+        #[arg(long, value_parser = parse_gap)]
+        from: f64,
+        /// Ending gap between the two fingers, in CSS pixels
+        #[arg(long, value_parser = parse_gap)]
+        to: f64,
+        /// Number of intermediate touch-move events across the gap change
         #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
         steps: u32,
         /// Delay between touch events in milliseconds
@@ -1050,6 +1089,34 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             }
         }
 
+        Command::Pinch {
+            session,
+            at,
+            from,
+            to,
+            steps,
+            delay,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client
+                .pinch((at.x, at.y), *from, *to, *steps, *delay, cli.timeout)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!("Pinched at: {at} gap {from} -> {to}")),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "pinch",
+                    "at": { "x": at.x, "y": at.y },
+                    "from_gap": from,
+                    "to_gap": to,
+                    "steps": steps,
+                    "delay_ms": delay,
+                }))
+                .unwrap()),
+            }
+        }
+
         Command::LongPress {
             session,
             at,
@@ -1290,11 +1357,16 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
                         match cli.format {
                             OutputFormat::Text => {
-                                if alive {
-                                    Ok(format!("Session {} is alive", info.id))
-                                } else {
-                                    Ok(format!("Session {} is dead", info.id))
-                                }
+                                let state = if alive { "alive" } else { "dead" };
+                                // The WebSocket URL carries the browser's CDP
+                                // port, which is what anyone dropping to raw
+                                // CDP for something khora has no command for
+                                // needs; without it here the only source is
+                                // the session JSON on disk.
+                                Ok(format!(
+                                    "Session {} is {}\nWebSocket: {}",
+                                    info.id, state, info.ws_url
+                                ))
                             }
                             OutputFormat::Json => {
                                 Ok(serde_json::to_string_pretty(&serde_json::json!({
@@ -1302,6 +1374,7 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                                     "alive": alive,
                                     "pid": info.pid,
                                     "headless": info.headless,
+                                    "ws_url": info.ws_url,
                                 }))
                                 .unwrap())
                             }
@@ -1562,6 +1635,23 @@ mod tests {
                 height: 400.0
             }
         );
+    }
+
+    #[test]
+    fn parse_gap_valid() {
+        assert_eq!(parse_gap("100").unwrap(), 100.0);
+        assert_eq!(parse_gap(" 42.5 ").unwrap(), 42.5);
+        assert_eq!(parse_gap("0").unwrap(), 0.0);
+    }
+
+    #[test]
+    fn parse_gap_rejects_bad_input() {
+        assert!(parse_gap("").is_err());
+        assert!(parse_gap("abc").is_err());
+        // A negative separation would cross the two fingers over.
+        assert!(parse_gap("-10").is_err());
+        assert!(parse_gap("inf").is_err());
+        assert!(parse_gap("NaN").is_err());
     }
 
     #[test]

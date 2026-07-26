@@ -122,6 +122,20 @@
   </div>
   <div id="touch-gate-result">gated: no</div>
 
+  <!-- pinch target: a pan/zoom canvas's gesture model in miniature. It
+       records the most simultaneous contacts it ever saw — which a
+       single-contact command can never push above 1 — and a scale tracking
+       the current finger separation against the starting one.
+
+       Keep this narrower than the 390px mobile viewport the set-viewport
+       section emulates: with `--mobile` and no meta-viewport tag the layout
+       viewport widens to fit overflowing content, so a 400px box silently
+       moved `window.innerWidth` to 408 and failed three unrelated asserts. -->
+  <div id="pinch-target" style="width: 300px; height: 200px; background: #fee; touch-action: none;">
+    pinch me
+  </div>
+  <div id="pinch-result">contacts: 0 scale: 1.00</div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -302,6 +316,35 @@
       }, { passive: true });
       target.addEventListener('touchend', function() {
         clearTimeout(timer);
+      }, { passive: true });
+    })();
+
+    // Pinch: the two-contact half of the gesture model, keyed off the
+    // distance between the touches exactly as a pan/zoom canvas is. Reset on
+    // each fresh gesture so a second pinch is measured from its own start.
+    (function() {
+      var target = document.getElementById('pinch-target');
+      var out = document.getElementById('pinch-result');
+      var maxContacts = 0, startGap = 0, scale = 1;
+
+      function gap(e) {
+        var a = e.touches[0], b = e.touches[1];
+        return Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+      }
+      function report() {
+        out.textContent = 'contacts: ' + maxContacts + ' scale: ' + scale.toFixed(2);
+      }
+
+      target.addEventListener('touchstart', function(e) {
+        maxContacts = e.touches.length;
+        scale = 1;
+        startGap = e.touches.length === 2 ? gap(e) : 0;
+        report();
+      }, { passive: true });
+      target.addEventListener('touchmove', function(e) {
+        if (e.touches.length > maxContacts) { maxContacts = e.touches.length; }
+        if (e.touches.length === 2 && startGap > 0) { scale = gap(e) / startGap; }
+        report();
       }, { passive: true });
     })();
 

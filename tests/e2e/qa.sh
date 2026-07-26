@@ -144,6 +144,10 @@ OUTPUT=$("$KHORA" status "$SESSION" 2>&1)
 EC=$?
 assert_exit "status exits 0" "$EC" 0
 assert_contains "session is alive" "$OUTPUT" "alive"
+# The WebSocket URL carries the browser's CDP port. Surfaced here so anyone
+# dropping to raw CDP for something khora has no command for doesn't have to
+# parse ~/.khora/sessions/<id>.json to find it (mesa task 572).
+assert_contains "status names the session's WebSocket URL" "$OUTPUT" "ws://"
 
 # Smoke check for mesa task 386: mouse_move on a never-painted page (the
 # fresh about:blank tab a launch starts on, before any navigate) is where a
@@ -484,6 +488,29 @@ PANX_SCROLL=$("$KHORA" eval "$SESSION" "document.getElementById('touch-panx').sc
 # straight through a contains-check on an assert whose whole job is to prove
 # nothing moved.
 assert_eq "vertical swipe did not pan a touch-action: pan-x container" "$PANX_SCROLL" "0"
+
+printf "\n${BOLD}▸ pinch${NC}\n"
+PINCH_POINT=$(touch_point pinch-target 0.5)
+
+OUTPUT=$("$KHORA" pinch "$SESSION" "$PINCH_POINT" --from 60 --to 180 2>&1)
+EC=$?
+assert_exit "pinch exits 0" "$EC" 0
+
+OUTPUT=$("$KHORA" text "$SESSION" "#pinch-result" 2>&1)
+# The structural assert: `swipe` dispatches exactly one touchPoint, so no
+# single-contact command can push this above 1 however it is aimed. This is
+# the line that fails on any build without a real two-contact dispatch.
+assert_contains "pinch delivered two simultaneous contacts" "$OUTPUT" "contacts: 2"
+# 60 -> 180 is a 3x spread, and a handler keying off Math.hypot of the two
+# touches must see exactly that — which also proves the two contacts moved
+# apart rather than merely coexisting.
+assert_contains "pinch spread the gap to 3x its start" "$OUTPUT" "scale: 3.00"
+
+# The reverse gesture: same command, gaps swapped. Without this a spread-only
+# assert leaves open that the scale only ever grows.
+"$KHORA" pinch "$SESSION" "$PINCH_POINT" --from 180 --to 60 > /dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#pinch-result" 2>&1)
+assert_contains "pinch squeezed the gap to a third of its start" "$OUTPUT" "scale: 0.33"
 
 printf "\n${BOLD}▸ long-press${NC}\n"
 # The tap above armed and cancelled the same 400ms timer, so a stale 'yes'
@@ -1015,6 +1042,7 @@ assert_contains "json text has content" "$OUTPUT" "Khora Test Page"
 OUTPUT=$("$KHORA" -f json status "$SESSION" 2>&1)
 assert_contains "json status has brace" "$OUTPUT" "{"
 assert_contains "json status has alive" "$OUTPUT" "alive"
+assert_contains "json status has ws_url" "$OUTPUT" "ws_url"
 CHROME_PID=$(echo "$OUTPUT" | grep -oE '"pid": [0-9]+' | awk '{print $2}')
 
 OUTPUT=$("$KHORA" -f json find "$SESSION" "#greeting" 2>&1)

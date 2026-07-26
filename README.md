@@ -101,6 +101,7 @@ khora launch --window-size 1366x768
 | `wheel <session> <at> <delta>` | Scroll with a trusted native wheel event at `X,Y` by `dX,dY` CSS pixels |
 | `touch <session> <at>` | Tap at raw viewport point `X,Y` with trusted touch events — real `TouchEvent`s and `pointerType: touch`, which `click-at` never produces |
 | `swipe <session> <from> <to>` | Swipe between `X,Y` points with trusted touch events (`--steps`, `--delay` ms). The only way to exercise `touch-action`, which governs touch panning exclusively — `wheel` can't reach it |
+| `pinch <session> <at> --from <gap> --to <gap>` | Pinch two fingers around `X,Y`, spreading or squeezing the gap between them in CSS pixels (`--steps`, `--delay` ms). The only two-contact gesture — `swipe` dispatches a single one, so pinch-zoom is out of its reach |
 | `long-press <session> <at>` | Hold a touch at `X,Y` then release (`--duration` ms, default 600) — for context menus and drag-activation delays |
 | `emulate-touch <session>` | Report a touch device (`navigator.maxTouchPoints`, `pointer: coarse`, `ontouchstart`) so load-time feature detection registers touch handlers — run it **before** `navigate`. `--max-points N`, `--off`. Sticks to the session |
 | `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element, `--clip X,Y,WxH` for an explicit region |
@@ -112,7 +113,7 @@ khora launch --window-size 1366x768
 | `console <session>` | Read console messages |
 | `eval <session> <js>` | Execute JavaScript, return result |
 | `kill <session>` | Close browser and clean up (`--all` to kill every session) |
-| `status [session]` | Check session status (or list all) |
+| `status [session]` | Check session status and report its CDP WebSocket URL (or list all) |
 | `network <session>` | List captured network requests (`fetch` and `XMLHttpRequest`) |
 | `reap` | Remove sessions whose Chrome died (`--all` to also kill live sessions, `--older-than <dur>` for age-based cleanup, e.g. `30m`, `2h`, `24h`) |
 

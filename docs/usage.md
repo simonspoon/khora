@@ -185,6 +185,20 @@ khora kill --all           # kill every active session at once
 
 Each session uses its own Chrome user data directory (a unique temp dir), so concurrent sessions can't corrupt each other's profile.
 
+`status` also reports the session's CDP WebSocket URL, which carries the
+browser's debugging port:
+
+```bash
+khora --format json status "$SESSION1" | jq -r .ws_url
+# ws://127.0.0.1:53421/devtools/browser/8f2c...
+```
+
+That is what you need when a check calls for a CDP method khora has no command
+for — connect to it directly rather than parsing
+`~/.khora/sessions/<id>.json`. Chrome reverts emulation overrides
+(`setTouchEmulationEnabled`, `setDeviceMetricsOverride`) the moment a client
+disconnects, so do the whole sequence on one connection.
+
 ### Reaping stale sessions
 
 Sessions whose Chrome process exited (crash, manual kill, `pkill chrome`) leave a stale session file behind. Khora auto-reaps these on every CLI invocation, but you can also clean up explicitly:
@@ -454,7 +468,7 @@ and relaunch the session.
 
 ### Touch gestures
 
-`touch`, `swipe` and `long-press` dispatch trusted touch events (CDP
+`touch`, `swipe`, `pinch` and `long-press` dispatch trusted touch events (CDP
 `Input.dispatchTouchEvent`). They are not a stylistic alternative to the mouse
 commands — they reach behavior the mouse path structurally cannot:
 
@@ -470,11 +484,25 @@ commands — they reach behavior the mouse path structurally cannot:
   `pointerType: "touch"`; the mouse path reports `"mouse"`, which gesture
   libraries routinely branch on.
 
+- **Two contacts at once.** `pinch` is the only command that dispatches more
+  than one, so pinch-zoom — defined by the *distance between* two fingers — is
+  unreachable from every other command including `swipe`.
+
 ```bash
 khora touch "$S" 150,220                        # tap
 khora swipe "$S" 200,600 200,200                # swipe up (--steps, --delay)
+khora pinch "$S" 400,300 --from 100 --to 300    # spread 3x (--steps, --delay)
+khora pinch "$S" 400,300 --from 300 --to 100    # squeeze back
 khora long-press "$S" 150,220 --duration 800    # press and hold, then release
 ```
+
+`pinch` places the two fingers `gap / 2` either side of the point on the
+horizontal axis and interpolates the gap from `--from` to `--to` across
+`--steps` moves, so the ratio of the two is the zoom factor a handler keying
+off `Math.hypot` of the touches will compute. Both gaps are required and must
+be `>= 0`. Horizontal placement is only a constraint for a handler that
+discriminates by axis rather than by distance — the usual pan/zoom canvas does
+not.
 
 A tap produces the full sequence a phone does — `touchstart`/`touchend`,
 `pointerdown`/`pointerup`, the compatibility `mousedown`/`mouseup`, then

@@ -1371,9 +1371,10 @@ impl CdpClient {
     /// Dispatch a single trusted touch event (CDP Input.dispatchTouchEvent).
     ///
     /// `points` carries the touch points still active *after* this event, so
-    /// `TouchStart`/`TouchMove` need exactly one (khora drives a single
-    /// finger) and `TouchEnd`/`TouchCancel` must carry none — CDP rejects the
-    /// combination the other way round.
+    /// `TouchStart`/`TouchMove` need at least one (one per finger — a pinch
+    /// sends two) and `TouchEnd`/`TouchCancel` must carry none, which is why
+    /// releasing two fingers is still a single empty `TouchEnd`. CDP rejects
+    /// the combination the other way round.
     async fn dispatch_touch_event(
         &self,
         page: &Page,
@@ -1399,15 +1400,22 @@ impl CdpClient {
         Ok(())
     }
 
-    /// The single finger khora dispatches, at a viewport point.
+    /// One touch contact at a viewport point, tagged with `id`.
     ///
     /// The `id` is pinned so every event in a gesture describes the same
     /// touch source; Chromium tracks a finger across start/move/end by that
     /// id, and letting it default would make each move look like a new one.
-    fn finger(at: (f64, f64)) -> TouchPoint {
+    /// Multi-contact gestures ([`Self::pinch`]) need the ids to differ, which
+    /// is what makes them two fingers rather than one teleporting one.
+    fn contact(id: f64, at: (f64, f64)) -> TouchPoint {
         let mut point = TouchPoint::new(at.0, at.1);
-        point.id = Some(0.0);
+        point.id = Some(id);
         point
+    }
+
+    /// The single finger the one-contact gestures dispatch.
+    fn finger(at: (f64, f64)) -> TouchPoint {
+        Self::contact(0.0, at)
     }
 
     /// Tap at a viewport point with trusted touch events (touchStart then
@@ -1489,6 +1497,69 @@ impl CdpClient {
                 &page,
                 DispatchTouchEventType::TouchMove,
                 vec![Self::finger((x, y))],
+                timeout_ms,
+            )
+            .await?;
+        }
+
+        tokio::time::sleep(delay).await;
+        self.dispatch_touch_event(&page, DispatchTouchEventType::TouchEnd, vec![], timeout_ms)
+            .await
+    }
+
+    /// Pinch two fingers around a viewport point, from one separation to
+    /// another (touchStart, interpolated touchMoves, touchEnd).
+    ///
+    /// The one gesture [`Self::swipe`] structurally cannot reach: it
+    /// dispatches a single contact, and pinch-zoom is defined by the
+    /// *distance between two* of them. The contacts are placed symmetrically
+    /// on the horizontal axis, `gap / 2` either side of `at`, and the gap is
+    /// interpolated from `from_gap` to `to_gap` across `steps` moves — so
+    /// `--from 100 --to 300` is a 3x spread and the reverse is a 3x squeeze.
+    ///
+    /// Horizontal placement is not a limitation for handlers that key off
+    /// `Math.hypot` of the two touches, which is the usual pan/zoom canvas
+    /// shape (measured against one in `tests/e2e/qa.sh`: scale tracks the gap
+    /// ratio). A handler that discriminates by axis would need its own
+    /// command, not a flag on this one.
+    pub async fn pinch(
+        &self,
+        at: (f64, f64),
+        from_gap: f64,
+        to_gap: f64,
+        steps: u32,
+        delay_ms: u64,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let page = self.get_or_create_page().await?;
+        let delay = std::time::Duration::from_millis(delay_ms);
+        // Same never-painted-page hit-test tax swipe() pays.
+        self.force_compositor_frame(&page).await;
+
+        let contacts = |gap: f64| {
+            let half = gap / 2.0;
+            vec![
+                Self::contact(0.0, (at.0 - half, at.1)),
+                Self::contact(1.0, (at.0 + half, at.1)),
+            ]
+        };
+
+        self.dispatch_touch_event(
+            &page,
+            DispatchTouchEventType::TouchStart,
+            contacts(from_gap),
+            timeout_ms,
+        )
+        .await?;
+
+        for i in 1..=steps {
+            tokio::time::sleep(delay).await;
+            let t = f64::from(i) / f64::from(steps);
+            let gap = from_gap + (to_gap - from_gap) * t;
+            self.dispatch_touch_event(
+                &page,
+                DispatchTouchEventType::TouchMove,
+                contacts(gap),
                 timeout_ms,
             )
             .await?;
