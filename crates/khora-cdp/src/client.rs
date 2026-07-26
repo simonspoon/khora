@@ -68,6 +68,14 @@ impl chromiumoxide::Command for DispatchTouchEvent {
 pub struct CdpClient {
     browser: Browser,
     _handler_handle: tokio::task::JoinHandle<()>,
+    /// Chrome user data directory owned by this session. Carried by `connect()`
+    /// as well as `launch()` so that `close()` can remove it on every path —
+    /// `kill`/`reap` always reach Chrome via `connect()`, and leaving this
+    /// `None` there made `close()`'s cleanup a silent no-op that leaked the
+    /// whole profile (tens of MB per launch) on the graceful path.
+    ///
+    /// Only `close()` acts on it, and only `kill`/`reap` call `close()`, so an
+    /// ordinary command's client can hold the path and drop it harmlessly.
     data_dir: Option<PathBuf>,
     pid: u32,
     /// Media emulation carried by the session, re-applied to each page this
@@ -206,7 +214,7 @@ impl CdpClient {
         Ok(Self {
             browser,
             _handler_handle: handler_handle,
-            data_dir: None,
+            data_dir: session.data_dir.clone(),
             pid: session.pid,
             media: session.media.clone().filter(|m| !m.is_empty()),
             touch: session.touch,
@@ -2351,9 +2359,198 @@ pub fn cleanup_data_dir(dir: &std::path::Path) {
     }
 }
 
+/// Filename prefix of every khora-created Chrome user data directory.
+/// `launch()` builds them as `<temp_dir>/khora-chrome-<nanos>`.
+pub const DATA_DIR_PREFIX: &str = "khora-chrome-";
+
+/// Total size in bytes of a directory tree. Best effort: entries that cannot be
+/// read are skipped rather than failing the walk, since this only feeds a
+/// human-facing "freed N MB" figure.
+fn dir_size_bytes(dir: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match entry.file_type() {
+            // Don't follow symlinks — a profile can contain them, and their
+            // target is not disk this directory owns.
+            Ok(ft) if ft.is_dir() => dir_size_bytes(&entry.path()),
+            Ok(ft) if ft.is_file() => entry.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Remove orphaned Chrome user data directories left in the system temp dir by
+/// khora launches whose session record is already gone.
+///
+/// Only paths named `<temp_dir>/khora-chrome-*` are considered, and any
+/// directory in `keep` (the data dirs of sessions that still exist) is skipped,
+/// so a concurrent session's live profile is never deleted out from under it.
+///
+/// A live session recorded by a build old enough to omit `data_dir` cannot be
+/// caught out by this: commit 9dfcc2d introduced the `khora-chrome-` prefix and
+/// the `data_dir` field together, and before it chromiumoxide used a fixed
+/// `chromiumoxide-runner/` directory that this prefix never matches. So a
+/// session with no `data_dir` owns no directory the sweep can see.
+///
+/// Returns `(directories removed, bytes freed)`.
+pub fn purge_orphan_data_dirs(keep: &[std::path::PathBuf]) -> (usize, u64) {
+    purge_orphan_data_dirs_in(&std::env::temp_dir(), keep, PURGE_MIN_AGE)
+}
+
+/// How recently a data dir may have been touched and still be spared.
+///
+/// `launch()` creates the data dir *before* Chrome starts and before the
+/// session JSON that names it is written, so a launch racing this sweep owns a
+/// directory that appears in neither `keep` nor any session record. Skipping
+/// anything freshly modified closes that window; orphans are minutes-to-days
+/// old, so nothing worth reclaiming is missed.
+const PURGE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// `purge_orphan_data_dirs` against an explicit parent directory and age bound,
+/// so the sweep can be tested without touching the real temp dir.
+fn purge_orphan_data_dirs_in(
+    parent: &std::path::Path,
+    keep: &[std::path::PathBuf],
+    min_age: std::time::Duration,
+) -> (usize, u64) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        tracing::warn!(dir = ?parent, "purge: failed to read temp dir");
+        return (0, 0);
+    };
+
+    let mut removed = 0;
+    let mut freed = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+            continue;
+        }
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(DATA_DIR_PREFIX)
+        {
+            continue;
+        }
+        if keep.iter().any(|k| k == &path) {
+            continue;
+        }
+        let recently_touched = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .and_then(|t| t.elapsed().map_err(std::io::Error::other))
+            .is_ok_and(|age| age < min_age);
+        if recently_touched {
+            tracing::debug!(?path, "purge: skipping recently modified data dir");
+            continue;
+        }
+
+        let size = dir_size_bytes(&path);
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                removed += 1;
+                freed += size;
+            }
+            Err(e) => tracing::warn!(?path, %e, "purge: failed to remove orphaned data dir"),
+        }
+    }
+
+    (removed, freed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a `khora-chrome-*`-style directory holding one file of `bytes`.
+    fn make_data_dir(parent: &std::path::Path, name: &str, bytes: usize) -> std::path::PathBuf {
+        let dir = parent.join(name);
+        std::fs::create_dir_all(dir.join("Default")).unwrap();
+        std::fs::write(dir.join("Default").join("Cookies"), vec![b'x'; bytes]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn purge_removes_orphans_but_spares_live_and_foreign_dirs() {
+        // A purge that swept the whole temp dir, or that ignored `keep`, would
+        // delete a concurrently-running session's profile out from under it.
+        let parent = std::env::temp_dir().join(format!(
+            "khora-purge-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&parent).unwrap();
+
+        let orphan_a = make_data_dir(&parent, "khora-chrome-1000", 512);
+        let orphan_b = make_data_dir(&parent, "khora-chrome-2000", 512);
+        let live = make_data_dir(&parent, "khora-chrome-3000", 512);
+        let foreign = make_data_dir(&parent, "some-other-tool-4000", 512);
+
+        let (removed, freed) = purge_orphan_data_dirs_in(
+            &parent,
+            std::slice::from_ref(&live),
+            std::time::Duration::ZERO,
+        );
+
+        assert_eq!(removed, 2, "only the two orphaned khora dirs should go");
+        assert_eq!(freed, 1024, "freed bytes should sum the removed trees");
+        assert!(!orphan_a.exists());
+        assert!(!orphan_b.exists());
+        assert!(live.exists(), "a session's live profile must be spared");
+        assert!(foreign.exists(), "non-khora dirs must never be touched");
+
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn purge_spares_a_freshly_created_data_dir() {
+        // A launch racing the sweep has already created its data dir but has
+        // not yet written the session JSON that would put it in `keep`, so age
+        // is the only thing standing between it and deletion.
+        let parent = std::env::temp_dir().join(format!(
+            "khora-purge-race-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&parent).unwrap();
+        let in_flight = make_data_dir(&parent, "khora-chrome-5000", 128);
+
+        let (removed, freed) = purge_orphan_data_dirs_in(&parent, &[], PURGE_MIN_AGE);
+
+        assert_eq!(removed, 0);
+        assert_eq!(freed, 0);
+        assert!(
+            in_flight.exists(),
+            "a data dir created seconds ago belongs to an in-flight launch"
+        );
+
+        std::fs::remove_dir_all(&parent).ok();
+    }
+
+    #[test]
+    fn dir_size_bytes_sums_nested_files() {
+        let parent = std::env::temp_dir().join(format!(
+            "khora-size-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let dir = make_data_dir(&parent, "khora-chrome-1", 300);
+        std::fs::write(dir.join("top-level"), vec![b'y'; 45]).unwrap();
+
+        assert_eq!(dir_size_bytes(&dir), 345);
+
+        std::fs::remove_dir_all(&parent).ok();
+    }
 
     /// Virtual-key codes a terminal emulator reads as an editing or
     /// navigation key rather than as text: Backspace/Tab/Enter, Escape,

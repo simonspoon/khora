@@ -271,6 +271,53 @@ pub fn format_targets(targets: &[BrowserTarget], format: OutputFormat) -> String
     }
 }
 
+/// Render a `reap` result: the sessions reaped, plus the orphaned data-dir
+/// sweep when `--purge-data-dirs` ran (`purged` is `None` when it did not, so
+/// the default output is unchanged).
+pub fn format_reap(
+    reaped: &[String],
+    purged: Option<(usize, u64)>,
+    format: OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Text => {
+            let mut out = format!("reaped {} sessions: {}", reaped.len(), reaped.join(", "));
+            if let Some((dirs, bytes)) = purged {
+                out.push_str(&format!(
+                    "\npurged {} orphaned data dirs ({})",
+                    dirs,
+                    human_bytes(bytes)
+                ));
+            }
+            out
+        }
+        OutputFormat::Json => {
+            let mut value = serde_json::json!({ "reaped": reaped });
+            if let Some((dirs, bytes)) = purged {
+                value["purged_data_dirs"] = serde_json::json!(dirs);
+                value["freed_bytes"] = serde_json::json!(bytes);
+            }
+            serde_json::to_string_pretty(&value).unwrap_or_default()
+        }
+    }
+}
+
+/// Format a byte count for humans (`16.0 GB`), for reporting reclaimed disk.
+fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 /// Shorten `s` to at most `max` characters, on a char boundary.
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
@@ -577,5 +624,46 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed.is_array());
         assert_eq!(parsed[0], "Hello");
+    }
+
+    #[test]
+    fn test_format_reap_without_purge_is_unchanged() {
+        // --purge-data-dirs is opt-in: the default output must not grow a line
+        // or a JSON key, since callers already parse this.
+        let reaped = vec!["abc123".to_string()];
+        assert_eq!(
+            format_reap(&reaped, None, OutputFormat::Text),
+            "reaped 1 sessions: abc123"
+        );
+        let parsed: serde_json::Value =
+            serde_json::from_str(&format_reap(&reaped, None, OutputFormat::Json)).unwrap();
+        assert_eq!(parsed["reaped"][0], "abc123");
+        assert!(parsed.get("purged_data_dirs").is_none());
+        assert!(parsed.get("freed_bytes").is_none());
+    }
+
+    #[test]
+    fn test_format_reap_with_purge_reports_dirs_and_size() {
+        let reaped: Vec<String> = vec![];
+        let text = format_reap(&reaped, Some((283, 17_179_869_184)), OutputFormat::Text);
+        assert_eq!(
+            text,
+            "reaped 0 sessions: \npurged 283 orphaned data dirs (16.0 GB)"
+        );
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(&format_reap(&reaped, Some((2, 1024)), OutputFormat::Json))
+                .unwrap();
+        assert_eq!(parsed["purged_data_dirs"], 2);
+        assert_eq!(parsed["freed_bytes"], 1024);
+    }
+
+    #[test]
+    fn test_human_bytes_scales_units() {
+        assert_eq!(human_bytes(0), "0 B");
+        assert_eq!(human_bytes(999), "999 B");
+        assert_eq!(human_bytes(1024), "1.0 KB");
+        assert_eq!(human_bytes(8_704_000), "8.3 MB");
+        assert_eq!(human_bytes(17_179_869_184), "16.0 GB");
     }
 }

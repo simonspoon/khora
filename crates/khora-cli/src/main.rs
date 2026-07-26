@@ -610,6 +610,10 @@ enum Command {
         /// Kill sessions older than this duration (e.g. 30m, 2h, 24h, 0s)
         #[arg(long)]
         older_than: Option<String>,
+        /// Also delete orphaned Chrome user data directories left in the temp
+        /// dir by earlier launches whose session record is already gone
+        #[arg(long)]
+        purge_data_dirs: bool,
     },
 }
 
@@ -1388,7 +1392,11 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             }
         }
 
-        Command::Reap { all, older_than } => {
+        Command::Reap {
+            all,
+            older_than,
+            purge_data_dirs,
+        } => {
             let now_secs = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1448,17 +1456,21 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                 reaped.push(info.id.clone());
             }
 
-            match cli.format {
-                OutputFormat::Text => Ok(format!(
-                    "reaped {} sessions: {}",
-                    reaped.len(),
-                    reaped.join(", ")
-                )),
-                OutputFormat::Json => Ok(serde_json::to_string_pretty(
-                    &serde_json::json!({ "reaped": reaped }),
-                )
-                .unwrap()),
-            }
+            let purged = if *purge_data_dirs {
+                // Re-list rather than reusing `sessions`: the reap loop removed
+                // records, and another khora process may have created one since.
+                // Whatever survives owns a live profile that must not be swept.
+                let keep: Vec<_> = SessionInfo::list_all()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|s| s.data_dir)
+                    .collect();
+                Some(khora_cdp::purge_orphan_data_dirs(&keep))
+            } else {
+                None
+            };
+
+            Ok(khora_core::output::format_reap(&reaped, purged, cli.format))
         }
     }
 }

@@ -1191,6 +1191,14 @@ assert_contains "blur json reports the action" "$OUTPUT" '"action": "blur"'
 
 printf "\n${BOLD}▸ kill${NC}\n"
 KILLED_SESSION="$SESSION"
+# Regression for mesa task 574: kill's happy path leaked the whole Chrome
+# profile (~8-45MB per launch; 362 orphans totalling 16GB were measured on one
+# machine). cleanup_data_dir() and close() both existed, but connect() —
+# which is how kill/reap always reach Chrome — hardcoded data_dir: None, so
+# close()'s cleanup was a silent no-op and only the *failure* arms cleaned up.
+# Capture the dir before the kill: the session JSON that names it is removed
+# by the same command.
+KILLED_DATA_DIR=$(python3 -c "import json,os,sys; p=os.path.expanduser('~/.khora/sessions/$SESSION.json'); print(json.load(open(p)).get('data_dir') or '')" 2>/dev/null || echo "")
 OUTPUT=$("$KHORA" kill "$SESSION" 2>&1)
 EC=$?
 assert_exit "kill exits 0" "$EC" 0
@@ -1203,6 +1211,18 @@ assert_contains "session gone after kill" "$OUTPUT" "not found"
 # Verify the underlying Chrome process actually died, not just the session file
 if [[ -n "$CHROME_PID" && "$CHROME_PID" != "0" ]]; then
   assert_process_gone "Chrome process $CHROME_PID exited after kill" "$CHROME_PID"
+fi
+
+# The data-dir half of the same kill. Asserted with assert_eq on a computed
+# "gone"/"present" rather than on `[[ -d ]]` directly, so a $KILLED_DATA_DIR
+# that failed to parse reports as a failure instead of silently passing the
+# way an unguarded negative assertion would.
+if [[ -n "$KILLED_DATA_DIR" ]]; then
+  DIR_STATE=$([[ -d "$KILLED_DATA_DIR" ]] && echo "present" || echo "gone")
+  assert_eq "kill removes the session's Chrome data dir" "$DIR_STATE" "gone"
+else
+  printf "  ${RED}FAIL${NC}  could not read data_dir from the session JSON before kill\n"
+  ((FAIL++))
 fi
 
 # Regression for mesa task 386: Kill's connect()-error handling used to
@@ -1232,6 +1252,37 @@ else
   # Safety net: don't leave a leaked Chrome running if the assertion above failed.
   kill -9 "$LEAK_PID" 2>/dev/null || true
 fi
+
+# ── reap --purge-data-dirs ───────────────────────────────
+
+# Fixing kill/reap stops *new* leaks; it cannot reclaim the ones already on
+# disk (283 orphans were still present when mesa task 574 was triaged), which
+# is what this flag is for. Backdate the decoy past PURGE_MIN_AGE — the sweep
+# deliberately spares anything freshly modified, since a launch racing it owns
+# a data dir that no session record names yet.
+printf "\n${BOLD}▸ reap --purge-data-dirs${NC}\n"
+ORPHAN_DIR="${TMPDIR:-/tmp}/khora-chrome-e2e-574-$$"
+mkdir -p "$ORPHAN_DIR/Default"
+echo "stale profile" > "$ORPHAN_DIR/Default/Cookies"
+touch -t 202001010000 "$ORPHAN_DIR"
+
+OUTPUT=$("$KHORA" reap --purge-data-dirs 2>&1)
+EC=$?
+assert_exit "reap --purge-data-dirs exits 0" "$EC" 0
+assert_contains "reap reports the data-dir sweep" "$OUTPUT" "purged"
+
+ORPHAN_STATE=$([[ -d "$ORPHAN_DIR" ]] && echo "present" || echo "gone")
+assert_eq "purge removes an orphaned khora-chrome-* dir" "$ORPHAN_STATE" "gone"
+rm -rf "$ORPHAN_DIR"
+
+# Same run, opposite direction: a non-khora temp dir must survive the sweep.
+BYSTANDER_DIR="${TMPDIR:-/tmp}/not-khora-e2e-574-$$"
+mkdir -p "$BYSTANDER_DIR"
+touch -t 202001010000 "$BYSTANDER_DIR"
+"$KHORA" reap --purge-data-dirs >/dev/null 2>&1
+BYSTANDER_STATE=$([[ -d "$BYSTANDER_DIR" ]] && echo "present" || echo "gone")
+assert_eq "purge leaves non-khora temp dirs alone" "$BYSTANDER_STATE" "present"
+rm -rf "$BYSTANDER_DIR"
 
 # ── summary ──────────────────────────────────────────────
 

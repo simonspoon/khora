@@ -975,6 +975,26 @@ fn test_reap_json_format() {
 }
 
 #[test]
+fn test_reap_help_documents_purge_data_dirs() {
+    khora()
+        .args(["reap", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--purge-data-dirs"));
+}
+
+#[test]
+fn test_reap_without_purge_reports_no_data_dir_sweep() {
+    // The sweep is opt-in, so the default JSON must not carry its keys —
+    // existing callers parse this output.
+    khora()
+        .args(["--format", "json", "reap"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("purged_data_dirs").not());
+}
+
+#[test]
 #[cfg(unix)]
 fn test_rust_log_diagnostics_go_to_stderr_not_stdout() {
     // stdout is the command's result and callers pipe it (`khora eval | jq`),

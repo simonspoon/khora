@@ -213,9 +213,37 @@ khora reap --older-than 0s   # remove every session
 
 # Also close live sessions (same as kill --all, but also reaps dead ones)
 khora reap --all
+
+# Also delete orphaned Chrome profiles left in the temp dir by earlier launches
+khora reap --purge-data-dirs
 ```
 
 `--older-than` accepts suffixes `s`, `m`, `h` (e.g. `30s`, `15m`, `24h`).
+
+### Reclaiming leaked Chrome profiles
+
+Every `launch` gets a private Chrome user data directory under the system temp
+dir (`khora-chrome-<nanos>`), typically 8-45MB by the time the session ends. It
+is removed when the session ends — but khora up to and including 0.3.17 only
+did so on the *failure* paths, so a normal `kill` or `reap` left it behind. A
+QA run that launches in a loop could accumulate gigabytes.
+
+`--purge-data-dirs` sweeps what those versions left behind:
+
+```bash
+khora reap --purge-data-dirs
+# reaped 0 sessions:
+# purged 283 orphaned data dirs (12.4 GB)
+```
+
+It only considers directories named `khora-chrome-*` in the system temp dir,
+skips any that a current session record still names, and skips any modified in
+the last minute — a `launch` creates its data dir before writing the session
+file that names it, so a very fresh directory may belong to a session that is
+still starting up. Concurrent khora sessions are therefore safe.
+
+In `--format json` the sweep adds `purged_data_dirs` and `freed_bytes`; without
+the flag neither key appears.
 
 ## Common patterns
 

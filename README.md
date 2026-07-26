@@ -115,7 +115,7 @@ khora launch --window-size 1366x768
 | `kill <session>` | Close browser and clean up (`--all` to kill every session) |
 | `status [session]` | Check session status and report its CDP WebSocket URL (or list all) |
 | `network <session>` | List captured network requests (`fetch` and `XMLHttpRequest`) |
-| `reap` | Remove sessions whose Chrome died (`--all` to also kill live sessions, `--older-than <dur>` for age-based cleanup, e.g. `30m`, `2h`, `24h`) |
+| `reap` | Remove sessions whose Chrome died (`--all` to also kill live sessions, `--older-than <dur>` for age-based cleanup, e.g. `30m`, `2h`, `24h`, `--purge-data-dirs` to also delete orphaned Chrome profiles) |
 
 ## Output
 
@@ -127,9 +127,11 @@ Default timeout is 5000ms, override with `--timeout` or `KHORA_TIMEOUT`.
 
 Sessions persist across CLI invocations. `launch` starts Chrome and saves a session file to `~/.khora/sessions/`. Subsequent commands reconnect using the session ID. `kill` closes the browser and removes the session file.
 
-Multiple concurrent sessions are supported — each gets a unique ID and a private Chrome user data directory.
+Multiple concurrent sessions are supported — each gets a unique ID and a private Chrome user data directory. That directory is deleted when the session ends, on every path: `kill`, `reap`, and auto-reap alike.
 
 Sessions whose Chrome process has died are auto-reaped on every CLI invocation. Use `khora reap` to clean up manually, `khora reap --all` to also close live sessions, or `khora reap --older-than 2h` to clear anything older than a given age.
+
+Chrome profiles orphaned by earlier khora versions (which leaked them on the graceful `kill`/`reap` path, up to and including 0.3.17) can be swept with `khora reap --purge-data-dirs`. It deletes `khora-chrome-*` directories in the system temp dir that no current session owns, and reports how much disk it reclaimed.
 
 ## Requirements
 
