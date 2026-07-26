@@ -87,6 +87,31 @@ pub struct TouchEmulation {
     pub max_touch_points: u32,
 }
 
+/// Viewport metrics emulated for a session (CDP
+/// `Emulation.setDeviceMetricsOverride`).
+///
+/// Persisted for the same reason as [`MediaEmulation`] and [`TouchEmulation`],
+/// though the loss is staged rather than immediate: width/height outlive the
+/// disconnect visually, but the override is gone at the protocol level, so the
+/// *next document* — i.e. the next `navigate` or reload — comes up at the real
+/// window size. `deviceScaleFactor` and `mobile` don't even last that long.
+/// Re-applying on connect puts the override back on the live connection before
+/// the navigation in the same invocation, which is what makes the page mount at
+/// the intended tier instead of at 1920 wide.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ViewportEmulation {
+    /// Viewport width in CSS pixels.
+    pub width: u32,
+    /// Viewport height in CSS pixels.
+    pub height: u32,
+    /// Device pixel ratio; `0.0` keeps Chrome's current value.
+    #[serde(default)]
+    pub dpr: f64,
+    /// Emulate a mobile device (meta-viewport handling, mobile UA hints).
+    #[serde(default)]
+    pub mobile: bool,
+}
+
 /// Session info persisted to disk so CLI invocations can reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -110,6 +135,10 @@ pub struct SessionInfo {
     /// `None` means the real device's capabilities are reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub touch: Option<TouchEmulation>,
+    /// Viewport metrics emulated for this session, re-applied on every connect.
+    /// `None` means the real window's metrics are reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport: Option<ViewportEmulation>,
 }
 
 impl SessionInfo {
@@ -199,6 +228,7 @@ mod tests {
             data_dir: None,
             media: None,
             touch: None,
+            viewport: None,
         }
     }
 
@@ -219,6 +249,38 @@ mod tests {
         let parsed: SessionInfo = serde_json::from_str(json).unwrap();
         assert!(parsed.media.is_none());
         assert!(parsed.touch.is_none());
+        assert!(parsed.viewport.is_none());
+    }
+
+    #[test]
+    fn test_viewport_emulation_roundtrip() {
+        let session = SessionInfo {
+            viewport: Some(ViewportEmulation {
+                width: 390,
+                height: 844,
+                dpr: 3.0,
+                mobile: true,
+            }),
+            ..sample_session()
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: SessionInfo = serde_json::from_str(&json).unwrap();
+        let vp = parsed.viewport.unwrap();
+        assert_eq!(vp.width, 390);
+        assert_eq!(vp.height, 844);
+        // dpr and mobile ride along deliberately: before this was persisted
+        // they were the parts Chrome dropped first, so a reload that restored
+        // only the size would silently downgrade a phone session to dpr 1.
+        assert_eq!(vp.dpr, 3.0);
+        assert!(vp.mobile);
+    }
+
+    #[test]
+    fn test_viewport_emulation_omitted_when_unset() {
+        // Same contract as touch: `--reset` clears the field entirely rather
+        // than writing a disabled-looking record.
+        let json = serde_json::to_string(&sample_session()).unwrap();
+        assert!(!json.contains("viewport"));
     }
 
     #[test]

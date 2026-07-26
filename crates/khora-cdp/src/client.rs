@@ -1,7 +1,7 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::emulation::{
-    MediaFeature, SetDeviceMetricsOverrideParams, SetEmulatedMediaParams,
-    SetTouchEmulationEnabledParams,
+    ClearDeviceMetricsOverrideParams, MediaFeature, SetDeviceMetricsOverrideParams,
+    SetEmulatedMediaParams, SetTouchEmulationEnabledParams,
 };
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
@@ -19,7 +19,7 @@ use khora_core::element::{
     BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest,
 };
 use khora_core::error::{KhoraError, KhoraResult};
-use khora_core::session::{MediaEmulation, SessionInfo, TouchEmulation};
+use khora_core::session::{MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -75,6 +75,8 @@ pub struct CdpClient {
     media: Option<MediaEmulation>,
     /// Touch emulation carried by the session, re-applied for the same reason.
     touch: Option<TouchEmulation>,
+    /// Viewport metrics carried by the session, re-applied for the same reason.
+    viewport: Option<ViewportEmulation>,
 }
 
 impl CdpClient {
@@ -154,6 +156,7 @@ impl CdpClient {
             data_dir: Some(data_dir.clone()),
             media: None,
             touch: None,
+            viewport: None,
         };
 
         let client = Self {
@@ -163,6 +166,7 @@ impl CdpClient {
             pid,
             media: None,
             touch: None,
+            viewport: None,
         };
 
         Ok((client, session))
@@ -206,6 +210,7 @@ impl CdpClient {
             pid: session.pid,
             media: session.media.clone().filter(|m| !m.is_empty()),
             touch: session.touch,
+            viewport: session.viewport,
         })
     }
 
@@ -1757,31 +1762,28 @@ impl CdpClient {
         (c.to_string(), "Unidentified".to_string(), vk)
     }
 
-    /// Override the page viewport via CDP Emulation.setDeviceMetricsOverride.
+    /// Override the page viewport via CDP `Emulation.setDeviceMetricsOverride`.
+    /// `None` clears the override and restores the real window's metrics.
     ///
     /// Headless Chrome clamps `launch --window-size` to a ~500px minimum inner
     /// width, so phone-width QA (375-430px) needs a metrics override instead.
     /// `dpr` 0.0 keeps the current device scale factor; `mobile` enables
     /// mobile emulation (meta-viewport handling, mobile UA hints).
-    pub async fn set_viewport(
-        &self,
-        width: u32,
-        height: u32,
-        dpr: f64,
-        mobile: bool,
-    ) -> KhoraResult<()> {
-        let page = self.get_or_create_page().await?;
-        let params = SetDeviceMetricsOverrideParams::builder()
-            .width(width as i64)
-            .height(height as i64)
-            .device_scale_factor(dpr)
-            .mobile(mobile)
-            .build()
-            .map_err(KhoraError::Cdp)?;
-        page.execute(params)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
-        Ok(())
+    ///
+    /// Like media and touch emulation this dies with the CDP connection, so the
+    /// caller persists it on the session and `connect()` reloads it. The loss is
+    /// less obvious here because it is *staged*: an already-loaded document keeps
+    /// reporting the emulated `innerWidth` after the connection that set it went
+    /// away, and only the next document created — the next `navigate` or reload —
+    /// comes up at the real window size. That is why a one-shot `set-viewport`
+    /// looked like it persisted while silently failing across every navigation.
+    pub async fn set_viewport(&self, viewport: Option<ViewportEmulation>) -> KhoraResult<()> {
+        // resolve_page() rather than get_or_create_page(): re-applying the
+        // session's *previous* metrics first would reflow the page at the old
+        // width on the way to the one asked for, firing a spurious matchMedia
+        // transition — same reason `emulate_touch` bypasses the re-apply.
+        let page = self.resolve_page().await?;
+        apply_viewport(&page, viewport).await
     }
 
     /// Read console messages from the page.
@@ -2090,6 +2092,9 @@ impl CdpClient {
         if let Some(touch) = &self.touch {
             apply_touch(&page, Some(*touch)).await?;
         }
+        if let Some(viewport) = &self.viewport {
+            apply_viewport(&page, Some(*viewport)).await?;
+        }
         Ok(page)
     }
 
@@ -2211,6 +2216,35 @@ async fn apply_touch(page: &Page, touch: Option<TouchEmulation>) -> KhoraResult<
     page.execute(params)
         .await
         .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+    Ok(())
+}
+
+/// Push a viewport override to a page. `None` clears it.
+///
+/// Clearing goes through `Emulation.clearDeviceMetricsOverride` rather than
+/// setting the real window's numbers back: only the clear takes
+/// `deviceScaleFactor` and `mobile` off with it, and re-asserting a size would
+/// leave the session emulating metrics it claims not to be emulating.
+async fn apply_viewport(page: &Page, viewport: Option<ViewportEmulation>) -> KhoraResult<()> {
+    match viewport {
+        Some(v) => {
+            let params = SetDeviceMetricsOverrideParams::builder()
+                .width(i64::from(v.width))
+                .height(i64::from(v.height))
+                .device_scale_factor(v.dpr)
+                .mobile(v.mobile)
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            page.execute(params)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+        None => {
+            page.execute(ClearDeviceMetricsOverrideParams::default())
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+    }
     Ok(())
 }
 

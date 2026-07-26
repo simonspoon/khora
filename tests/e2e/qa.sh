@@ -803,6 +803,11 @@ assert_contains "network has POST method" "$OUTPUT" "POST"
 # ── set-viewport ─────────────────────────────────────────
 
 printf "\n${BOLD}▸ set-viewport${NC}\n"
+# Start from a pristine fixture. Under --mobile the layout viewport shrink-to-
+# fits content wider than the requested width, and earlier sections have been
+# typing into and mutating this page — so without the reload the width asserted
+# below is whatever those left behind (measured: 421, not 390).
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
 OUTPUT=$("$KHORA" set-viewport "$SESSION" 390x844 3 --mobile 2>&1)
 EC=$?
 assert_exit "set-viewport exits 0" "$EC" 0
@@ -822,6 +827,48 @@ assert_contains "viewport persists across navigate" "$OUTPUT" "390"
 "$KHORA" screenshot "$SESSION" -o "$SCREENSHOT" >/dev/null 2>&1
 OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
 assert_contains "viewport survives a screenshot" "$OUTPUT" "390"
+
+# The navigate above is same-process (file:// -> the same file://), and a
+# same-process navigation kept the override even before it was persisted — so
+# on its own it never covered the reported bug. What dropped the override was a
+# renderer-process SWAP, which is what every real run hits on its first
+# navigate, since a fresh launch sits on chrome://new-tab-page/. Cross to a
+# different origin here so the assert can actually fail.
+"$KHORA" navigate "$SESSION" 'data:text/html,<meta name="viewport" content="width=device-width"><script>addEventListener("load",function(){document.title="w="+innerWidth+" mq="+matchMedia("(max-width: 600px)").matches})</script>x' >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth" 2>&1)
+assert_eq "viewport survives a cross-process navigate" "$OUTPUT" "390"
+
+# ...and it is in place before the document runs, not merely restored after.
+# This is the part that costs more than a re-issue: an app that snapshots its
+# breakpoint at mount reads the width once, and reading 1920 there mounts the
+# desktop tree under phone CSS.
+OUTPUT=$("$KHORA" eval "$SESSION" "document.title" 2>&1)
+assert_eq "load-time width and media query see the emulated viewport" "$OUTPUT" "w=390 mq=true"
+
+# dpr rides along with the size. Chrome used to drop deviceScaleFactor on the
+# disconnect that ends every khora command, so this read was 1 no matter what
+# was asked for.
+OUTPUT=$("$KHORA" eval "$SESSION" "window.devicePixelRatio" 2>&1)
+assert_eq "dpr survives into a later invocation" "$OUTPUT" "3"
+
+OUTPUT=$("$KHORA" set-viewport "$SESSION" --reset 2>&1)
+EC=$?
+assert_exit "set-viewport --reset exits 0" "$EC" 0
+assert_contains "reset reports cleared" "$OUTPUT" "cleared"
+OUTPUT=$("$KHORA" eval "$SESSION" "window.devicePixelRatio" 2>&1)
+assert_eq "reset restores the real device pixel ratio" "$OUTPUT" "1"
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" "window.innerWidth < 500" 2>&1)
+assert_eq "reset stops the override being re-applied on later commands" "$OUTPUT" "false"
+
+"$KHORA" set-viewport "$SESSION" >/dev/null 2>&1
+assert_exit "set-viewport with neither size nor --reset is an error" "$?" 2
+"$KHORA" set-viewport "$SESSION" 390x844 --reset >/dev/null 2>&1
+assert_exit "set-viewport --reset with a size is an error" "$?" 2
+
+# Put the phone viewport back: everything downstream ran under it before this
+# section learned to clear one, and the reset above now really does stick.
+"$KHORA" set-viewport "$SESSION" 390x844 3 --mobile >/dev/null 2>&1
 
 # ── emulate-media ────────────────────────────────────────
 

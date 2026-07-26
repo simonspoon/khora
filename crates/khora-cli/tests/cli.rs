@@ -669,6 +669,51 @@ fn test_set_viewport_help() {
 }
 
 #[test]
+fn test_set_viewport_help_documents_persistence_and_reset() {
+    // The command's whole contract changed — an override now outlives the
+    // invocation — so --help has to say so, and has to offer the way back out.
+    khora()
+        .args(["set-viewport", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("re-applied"))
+        .stdout(predicate::str::contains("--reset"));
+}
+
+#[test]
+fn test_set_viewport_requires_size_or_reset() {
+    // Guards the clap layer, not the helper below it: `size` became optional
+    // so --reset could stand alone, and nothing under clap would ever see a
+    // call that named neither.
+    khora()
+        .args(["set-viewport", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn test_set_viewport_reset_conflicts_with_size() {
+    khora()
+        .args(["set-viewport", "nonexistent_xyz", "390x844", "--reset"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_set_viewport_reset_reaches_the_session_lookup() {
+    // Proves --reset is accepted by the parser and gets as far as resolving a
+    // session — otherwise the two conflict tests above could both pass while
+    // --reset was itself unparseable.
+    khora()
+        .args(["set-viewport", "nonexistent_xyz", "--reset"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_set_viewport_nonexistent_session() {
     khora()
         .args(["set-viewport", "nonexistent_xyz", "390x844"])

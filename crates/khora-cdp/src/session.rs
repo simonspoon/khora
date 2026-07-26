@@ -161,6 +161,7 @@ mod tests {
             data_dir: None,
             media: None,
             touch: None,
+            viewport: None,
         }
     }
 

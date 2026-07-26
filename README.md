@@ -84,7 +84,7 @@ khora launch --window-size 1366x768
 |---------|-------------|
 | `launch` | Start Chrome (headless by default, `--visible` for headed, `--window-size WxH`) |
 | `navigate <session> <url>` | Go to a URL (`--no-cache` to bypass the browser cache) |
-| `set-viewport <session> <WxH> [dpr]` | Override the viewport — phone widths headless Chrome won't allow via `--window-size` (`--mobile` for mobile emulation) |
+| `set-viewport <session> <WxH> [dpr]` | Override the viewport — phone widths headless Chrome won't allow via `--window-size` (`--mobile` for mobile emulation, `--reset` to clear). Persists on the session and is re-applied before every later command, so it survives `navigate` |
 | `emulate-media <session>` | Emulate CSS media features — `--color-scheme`, `--reduced-motion`, `--forced-colors`, `--media` (`screen`/`print`), `--reset`. Sticks to the session and fires real `matchMedia` change events |
 | `find <session> <selector>` | Find elements by CSS selector |
 | `click <session> <selector>` | Click an element |

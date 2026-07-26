@@ -67,12 +67,47 @@ Headless Chrome clamps the window to a ~500px minimum inner width, so
 khora set-viewport "$S" 390x844              # iPhone 14 Pro sized viewport
 khora set-viewport "$S" 390x844 3 --mobile   # + device pixel ratio 3, mobile emulation
 khora eval "$S" "window.innerWidth"          # → 390
+khora set-viewport "$S" --reset              # back to the real window's metrics
 ```
 
-The size override sticks for the life of the Chrome session, across later
-khora commands and navigations. The `dpr` and `--mobile` parts of the
-override are applied but can reset once the invocation disconnects —
-rely on the width/height, not on `devicePixelRatio`, in later commands.
+The whole override — size, `dpr` and `--mobile` alike — sticks for the life of
+the Chrome session, across later khora commands and navigations, and applies
+before each navigation rather than after it. So a page that reads its
+breakpoint once at mount (`useState(isPhone)`, a constructor-time `matchMedia`)
+mounts at the tier you asked for:
+
+```bash
+khora set-viewport "$S" 390x844
+khora navigate "$S" "https://app.com"
+khora eval "$S" "window.innerWidth"          # → 390, not 1920
+```
+
+That works because Chrome drops a device-metrics override when the CDP client
+that set it disconnects — which khora does after every command — so khora
+records the override on the session and re-applies it on each connect, the same
+way it handles [media](#media-features-dark-mode-reduced-motion-print) and
+[touch](#touch-feature-detection) emulation.
+
+Before that (khora ≤ 0.3.17) the loss was staged and easy to miss: the loaded
+document kept rendering at the emulated width, and only the *next* document
+came up at the real window size. Since a fresh `launch` sits on
+`chrome://new-tab-page/`, the first `navigate` of every run crossed renderer
+processes and silently reset the viewport — while a same-origin navigation kept
+it, which is why the failure looked intermittent. `dpr` and `--mobile` never
+survived even one disconnect, so a "phone" session was really running at phone
+width with mobile emulation off.
+
+Two consequences of `--mobile` now actually reaching your page, both of them
+real phone behaviour rather than khora quirks:
+
+- A page with no `<meta name="viewport">` lays out at Chrome's **980px** mobile
+  default rather than at the width you asked for.
+- Content wider than the viewport makes the layout viewport **shrink-to-fit**
+  it, so `innerWidth` comes back larger than you asked for — a 421px-wide
+  element in a 390px viewport reads back as 429.
+
+In both cases `innerWidth` is telling you something true about the page. If you
+only want the dimensions and not mobile layout semantics, drop `--mobile`.
 
 ### Media features (dark mode, reduced motion, print)
 
@@ -123,10 +158,11 @@ Assert the *result* of the flip (a class, a computed style, a screenshot)
 rather than the event itself — delivery is a task on the page's event loop, so
 an assertion in the same breath as the flip can outrun the re-render.
 
-Unlike `set-viewport`, media emulation is **not** something Chrome keeps on its
-own: it is reverted the moment the CDP client that set it disconnects, which
-khora does at the end of every command. khora therefore records the state on
-the session and re-applies it on each connect. The practical consequence is
+Media emulation is **not** something Chrome keeps on its own: it is reverted the
+moment the CDP client that set it disconnects, which khora does at the end of
+every command. khora therefore records the state on the session and re-applies
+it on each connect — the same treatment `set-viewport` and `emulate-touch` get,
+for the same reason. The practical consequence is
 that between two khora commands the page is momentarily back on Chrome's
 defaults, so a page that *logs* or *counts* scheme changes will see extra
 transitions; the state observed by any khora command is always the one you set.
@@ -506,11 +542,11 @@ Note that no device-metrics override is needed for the pointer and hover
 queries — touch emulation alone moves them. Pair it with `set-viewport` only
 when you also want phone dimensions.
 
-Like media emulation, this sticks to the session: Chrome reverts the override
-when the CDP client that set it disconnects, which khora does after every
-command, so khora persists the state and re-applies it on each connect. That
-re-apply runs before the navigation in the same invocation, which is what makes
-the load-time value land.
+Like media emulation and `set-viewport`, this sticks to the session: Chrome
+reverts the override when the CDP client that set it disconnects, which khora
+does after every command, so khora persists the state and re-applies it on each
+connect. That re-apply runs before the navigation in the same invocation, which
+is what makes the load-time value land.
 
 ### Screenshot comparison
 

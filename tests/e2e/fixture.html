@@ -2,6 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!-- Required for the set-viewport --mobile asserts to mean anything. Mobile
+       emulation only honours the requested width for a page that opts in; a
+       page without this tag lays out at Chrome's 980px mobile default, exactly
+       as it would on a real phone. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Khora QA Fixture</title>
 </head>
 <body>

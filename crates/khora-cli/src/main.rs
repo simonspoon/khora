@@ -160,17 +160,29 @@ enum Command {
     },
 
     /// Override the viewport size (CDP Emulation.setDeviceMetricsOverride)
+    ///
+    /// The override sticks to the session and is re-applied on every later
+    /// command, because Chrome drops device-metrics emulation when the CDP
+    /// client that set it disconnects — which khora does after each invocation.
+    /// Without that re-apply the next `navigate` created its document at the
+    /// real window width, so the viewport survived being read but not being
+    /// used. --reset drops the override and restores the real metrics.
+    #[command(group = clap::ArgGroup::new("viewport_target").required(true).multiple(true))]
     SetViewport {
         /// Session ID
         session: String,
         /// Viewport size as WxH (e.g. 390x844)
-        size: WindowSize,
+        #[arg(group = "viewport_target")]
+        size: Option<WindowSize>,
         /// Device pixel ratio (0 keeps the current value)
         #[arg(default_value_t = 0.0, value_parser = parse_dpr)]
         dpr: f64,
         /// Emulate a mobile device (meta-viewport handling, mobile UA hints)
         #[arg(long)]
         mobile: bool,
+        /// Drop the viewport override and restore the real window's metrics
+        #[arg(long, group = "viewport_target", conflicts_with_all = ["size", "dpr", "mobile"])]
+        reset: bool,
     },
 
     /// Emulate CSS media features (CDP Emulation.setEmulatedMedia)
@@ -688,33 +700,34 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             size,
             dpr,
             mobile,
+            reset,
         } => {
-            let session_info = khora_cdp::load_and_verify(session)?;
-            let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            client
-                .set_viewport(size.width, size.height, *dpr, *mobile)
-                .await?;
+            let requested = if *reset {
+                None
+            } else {
+                // The arg group makes exactly one of `size`/`--reset` present.
+                size.as_ref()
+                    .map(|s| khora_core::session::ViewportEmulation {
+                        width: s.width,
+                        height: s.height,
+                        dpr: *dpr,
+                        mobile: *mobile,
+                    })
+            };
 
-            match cli.format {
-                OutputFormat::Text => {
-                    let mut msg = format!("Viewport set: {size}");
-                    if *dpr > 0.0 {
-                        msg.push_str(&format!(" dpr={dpr}"));
-                    }
-                    if *mobile {
-                        msg.push_str(" (mobile)");
-                    }
-                    Ok(msg)
-                }
-                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
-                    "action": "set_viewport",
-                    "width": size.width,
-                    "height": size.height,
-                    "dpr": dpr,
-                    "mobile": mobile,
-                }))
-                .unwrap()),
-            }
+            let mut session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client.set_viewport(requested).await?;
+
+            // Persist only after Chrome accepted it, so a rejected value can't
+            // leave later commands re-applying something that never worked.
+            session_info.viewport = requested;
+            session_info.save()?;
+
+            Ok(khora_core::output::format_viewport_emulation(
+                requested.as_ref(),
+                cli.format,
+            ))
         }
 
         Command::EmulateMedia {

@@ -1,5 +1,5 @@
 use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest};
-use crate::session::{MediaEmulation, SessionInfo, TouchEmulation};
+use crate::session::{MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation};
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -79,6 +79,38 @@ pub fn format_touch_emulation(
             "enabled": touch.is_some(),
             "max_touch_points": touch.map(|t| t.max_touch_points),
             "ontouchstart_pending": ontouchstart_pending,
+        }))
+        .unwrap_or_default(),
+    }
+}
+
+/// Format the outcome of a `set-viewport` call. `None` means the override was
+/// cleared.
+pub fn format_viewport_emulation(
+    viewport: Option<&ViewportEmulation>,
+    format: OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Text => match viewport {
+            Some(v) => {
+                let mut msg = format!("Viewport set: {}x{}", v.width, v.height);
+                if v.dpr > 0.0 {
+                    msg.push_str(&format!(" dpr={}", v.dpr));
+                }
+                if v.mobile {
+                    msg.push_str(" (mobile)");
+                }
+                msg
+            }
+            None => "Viewport override cleared.".to_string(),
+        },
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "action": "set_viewport",
+            "enabled": viewport.is_some(),
+            "width": viewport.map(|v| v.width),
+            "height": viewport.map(|v| v.height),
+            "dpr": viewport.map(|v| v.dpr),
+            "mobile": viewport.map(|v| v.mobile),
         }))
         .unwrap_or_default(),
     }
@@ -263,6 +295,7 @@ mod tests {
             data_dir: None,
             media: None,
             touch: None,
+            viewport: None,
         }
     }
 
@@ -290,6 +323,48 @@ mod tests {
         assert_eq!(v["enabled"], serde_json::json!(false));
         assert_eq!(v["max_touch_points"], serde_json::Value::Null);
         assert_eq!(v["ontouchstart_pending"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_format_viewport_emulation_text() {
+        let vp = ViewportEmulation {
+            width: 390,
+            height: 844,
+            dpr: 3.0,
+            mobile: true,
+        };
+        let out = format_viewport_emulation(Some(&vp), OutputFormat::Text);
+        assert_eq!(out, "Viewport set: 390x844 dpr=3 (mobile)");
+
+        // dpr 0 means "keep whatever Chrome has", so echoing it back as
+        // `dpr=0` would report an override that was never asked for.
+        let plain = ViewportEmulation {
+            width: 390,
+            height: 844,
+            dpr: 0.0,
+            mobile: false,
+        };
+        assert_eq!(
+            format_viewport_emulation(Some(&plain), OutputFormat::Text),
+            "Viewport set: 390x844"
+        );
+
+        assert_eq!(
+            format_viewport_emulation(None, OutputFormat::Text),
+            "Viewport override cleared."
+        );
+    }
+
+    #[test]
+    fn test_format_viewport_emulation_json_cleared() {
+        let out = format_viewport_emulation(None, OutputFormat::Json);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["action"], serde_json::json!("set_viewport"));
+        assert_eq!(v["enabled"], serde_json::json!(false));
+        // Null rather than a stale number: a consumer must not read a width
+        // off a response that says the override is gone.
+        assert_eq!(v["width"], serde_json::Value::Null);
+        assert_eq!(v["mobile"], serde_json::Value::Null);
     }
 
     #[test]
