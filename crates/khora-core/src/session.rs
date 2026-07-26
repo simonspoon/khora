@@ -87,6 +87,31 @@ pub struct TouchEmulation {
     pub max_touch_points: u32,
 }
 
+/// On-screen-keyboard emulation for a session: how many CSS pixels of the
+/// visual viewport a keyboard is covering.
+///
+/// Unlike every other emulation on this struct there is no CDP command behind
+/// it — Chrome cannot raise a keyboard and no protocol domain models one — so
+/// it is implemented by shadowing `window.visualViewport.height` in the page.
+/// The distinction that makes the whole command worth having: a keyboard
+/// shrinks the **visual** viewport and leaves the **layout** viewport alone, so
+/// `vh`/`dvh`/`%` and `position: fixed` do not follow it. `set-viewport` shrinks
+/// both, which makes any keyboard-related layout bug disappear into a green
+/// result.
+///
+/// Persisted for the same reason as [`MediaEmulation`] and [`TouchEmulation`]:
+/// the page-side shadow is installed through a CDP-session-scoped
+/// `Page.addScriptToEvaluateOnNewDocument`, which Chrome drops when the client
+/// that registered it disconnects — after every khora command. Re-applying on
+/// connect is also what puts it in front of the *next* document, so an app that
+/// reads `visualViewport.height` at mount sees the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyboardEmulation {
+    /// Height of the emulated keyboard in CSS pixels. `visualViewport.height`
+    /// reports the real height minus this.
+    pub inset: u32,
+}
+
 /// Viewport metrics emulated for a session (CDP
 /// `Emulation.setDeviceMetricsOverride`).
 ///
@@ -139,6 +164,10 @@ pub struct SessionInfo {
     /// `None` means the real window's metrics are reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport: Option<ViewportEmulation>,
+    /// On-screen-keyboard emulation for this session, re-applied on every
+    /// connect. `None` means no keyboard is up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard: Option<KeyboardEmulation>,
 }
 
 impl SessionInfo {
@@ -229,6 +258,7 @@ mod tests {
             media: None,
             touch: None,
             viewport: None,
+            keyboard: None,
         }
     }
 
@@ -250,6 +280,26 @@ mod tests {
         assert!(parsed.media.is_none());
         assert!(parsed.touch.is_none());
         assert!(parsed.viewport.is_none());
+        assert!(parsed.keyboard.is_none());
+    }
+
+    #[test]
+    fn test_keyboard_emulation_roundtrip() {
+        let session = SessionInfo {
+            keyboard: Some(KeyboardEmulation { inset: 336 }),
+            ..sample_session()
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.keyboard.unwrap().inset, 336);
+    }
+
+    #[test]
+    fn test_keyboard_emulation_omitted_when_off() {
+        // Same contract as touch/viewport: `--off` clears the field rather than
+        // writing a zero inset, which an older khora would read as a keyboard.
+        let json = serde_json::to_string(&sample_session()).unwrap();
+        assert!(!json.contains("keyboard"));
     }
 
     #[test]

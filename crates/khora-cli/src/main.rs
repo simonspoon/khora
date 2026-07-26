@@ -247,6 +247,38 @@ enum Command {
         off: bool,
     },
 
+    /// Emulate an on-screen keyboard by shrinking the visual viewport only
+    ///
+    /// Shrinks window.visualViewport.height by PX and fires `resize` on the
+    /// VisualViewport object the page subscribed to. The LAYOUT viewport is
+    /// left untouched, which is the whole point: a real mobile keyboard does
+    /// not resize it either, so vh/dvh/% and `position: fixed` keep reporting
+    /// the full height while the bottom of the shell sits behind the keyboard.
+    ///
+    /// Do NOT reach for `set-viewport` instead — it shrinks both viewports, so
+    /// `dvh` follows, the shell resizes itself, and the bug under test vanishes
+    /// into a green result.
+    ///
+    /// The override sticks to the session and is re-applied on every later
+    /// command, so it also lands ahead of a following `navigate` and is visible
+    /// to an app that reads visualViewport.height at mount.
+    ///
+    /// Not emulated: visualViewport.offsetTop (a real browser scrolls the
+    /// layout viewport to keep a focused input above the keyboard). Nothing is
+    /// focused and nothing scrolls here, so an offsetTop-based translate stays
+    /// unverified.
+    #[command(group = clap::ArgGroup::new("keyboard_target").required(true).multiple(false))]
+    EmulateKeyboard {
+        /// Session ID
+        session: String,
+        /// Keyboard height in CSS pixels (iOS ~336, Android ~300)
+        #[arg(group = "keyboard_target", value_parser = clap::value_parser!(u32).range(1..=10_000))]
+        px: Option<u32>,
+        /// Retract the keyboard and restore the real visual viewport
+        #[arg(long, group = "keyboard_target")]
+        off: bool,
+    },
+
     /// Find elements by CSS selector
     Find {
         /// Session ID
@@ -841,6 +873,31 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             Ok(khora_core::output::format_touch_emulation(
                 requested.as_ref(),
                 changed,
+                cli.format,
+            ))
+        }
+
+        Command::EmulateKeyboard { session, px, off } => {
+            let requested = if *off {
+                None
+            } else {
+                // The arg group makes exactly one of `px`/`--off` present.
+                px.map(|inset| khora_core::session::KeyboardEmulation { inset })
+            };
+
+            let mut session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            let visual_height = client.emulate_keyboard(requested).await?;
+
+            // Persist only after the page accepted it, so a rejected value
+            // can't leave later commands re-applying something that never
+            // worked.
+            session_info.keyboard = requested;
+            session_info.save()?;
+
+            Ok(khora_core::output::format_keyboard_emulation(
+                requested.as_ref(),
+                visual_height,
                 cli.format,
             ))
         }

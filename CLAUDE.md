@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs check, test, clippy `-D warnings`, and fmt 
 Read `docs/architecture.md` first — it is the source of truth for crate layout, session lifecycle, and CDP integration. Key points:
 
 - **3 crates, layered:** `khora-core` (types, config, errors, output — no Chrome deps) → `khora-cdp` (Chrome discovery, `CdpClient` over chromiumoxide, session liveness/reap) → `khora-cli` (clap parser in `main.rs`, dispatches to `CdpClient`).
-- **Sessions persist across CLI invocations** as JSON in `~/.khora/sessions/<id>.json` (ID, WebSocket URL, Chrome PID, headless flag, data_dir, plus emulation state that Chrome drops on CDP disconnect and khora re-applies on connect — `media`, `touch`, `viewport`). Each `launch` gets its own tempdir user-data-dir. Commands reconnect via `load_and_verify()`, which re-checks the PID and returns `SessionDead` if gone.
+- **Sessions persist across CLI invocations** as JSON in `~/.khora/sessions/<id>.json` (ID, WebSocket URL, Chrome PID, headless flag, data_dir, plus emulation state that Chrome drops on CDP disconnect and khora re-applies on connect — `media`, `touch`, `viewport`, `keyboard`). Each `launch` gets its own tempdir user-data-dir. Commands reconnect via `load_and_verify()`, which re-checks the PID and returns `SessionDead` if gone.
 - **Auto-reap:** every non-`reap` CLI invocation first calls `reap_stale_sessions()` to drop sessions whose PID died. Best-effort — it must never fail the caller.
 
 ## Conventions

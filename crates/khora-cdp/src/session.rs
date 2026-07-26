@@ -162,6 +162,7 @@ mod tests {
             media: None,
             touch: None,
             viewport: None,
+            keyboard: None,
         }
     }
 

@@ -104,6 +104,7 @@ khora launch --window-size 1366x768
 | `pinch <session> <at> --from <gap> --to <gap>` | Pinch two fingers around `X,Y`, spreading or squeezing the gap between them in CSS pixels (`--steps`, `--delay` ms). The only two-contact gesture — `swipe` dispatches a single one, so pinch-zoom is out of its reach |
 | `long-press <session> <at>` | Hold a touch at `X,Y` then release (`--duration` ms, default 600) — for context menus and drag-activation delays |
 | `emulate-touch <session>` | Report a touch device (`navigator.maxTouchPoints`, `pointer: coarse`, `ontouchstart`) so load-time feature detection registers touch handlers — run it **before** `navigate`. `--max-points N`, `--off`. Sticks to the session |
+| `emulate-keyboard <session> <px>` | Emulate an on-screen keyboard `px` tall: shrinks `visualViewport.height` **only**, leaving the layout viewport (and so `dvh`/`vh`/`fixed`) alone, and fires `resize` on the page's own `VisualViewport`. `--off`. Sticks to the session |
 | `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element, `--clip X,Y,WxH` for an explicit region |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

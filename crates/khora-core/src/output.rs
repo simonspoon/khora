@@ -1,5 +1,7 @@
 use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest};
-use crate::session::{MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation};
+use crate::session::{
+    KeyboardEmulation, MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation,
+};
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -79,6 +81,38 @@ pub fn format_touch_emulation(
             "enabled": touch.is_some(),
             "max_touch_points": touch.map(|t| t.max_touch_points),
             "ontouchstart_pending": ontouchstart_pending,
+        }))
+        .unwrap_or_default(),
+    }
+}
+
+/// Format the outcome of an `emulate-keyboard` call. `None` means the keyboard
+/// was retracted.
+///
+/// `visual_height` is read back from the page rather than computed here: it is
+/// the number the app's own listener just saw, and the only one that proves the
+/// shadow reached the document. Reporting it beside the inset also removes the
+/// ambiguity in the argument — `PX` is the keyboard's height, not the
+/// viewport's.
+pub fn format_keyboard_emulation(
+    keyboard: Option<&KeyboardEmulation>,
+    visual_height: f64,
+    format: OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Text => match keyboard {
+            Some(k) => format!(
+                "Keyboard emulated: inset={}px visualViewport.height={} \
+                 (layout viewport unchanged)",
+                k.inset, visual_height
+            ),
+            None => format!("Keyboard emulation cleared. visualViewport.height={visual_height}"),
+        },
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "action": "emulate_keyboard",
+            "enabled": keyboard.is_some(),
+            "inset": keyboard.map(|k| k.inset),
+            "visual_viewport_height": visual_height,
         }))
         .unwrap_or_default(),
     }
@@ -343,6 +377,7 @@ mod tests {
             media: None,
             touch: None,
             viewport: None,
+            keyboard: None,
         }
     }
 
@@ -370,6 +405,45 @@ mod tests {
         assert_eq!(v["enabled"], serde_json::json!(false));
         assert_eq!(v["max_touch_points"], serde_json::Value::Null);
         assert_eq!(v["ontouchstart_pending"], serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_format_keyboard_emulation_text_reports_both_numbers() {
+        let kb = KeyboardEmulation { inset: 300 };
+        let out = format_keyboard_emulation(Some(&kb), 544.0, OutputFormat::Text);
+        // Both numbers, because `300` alone is ambiguous between "the keyboard
+        // is 300px tall" and "the viewport is now 300px tall".
+        assert!(out.contains("inset=300px"), "{out}");
+        assert!(out.contains("visualViewport.height=544"), "{out}");
+        // The layout viewport not moving is the property callers came for and
+        // the one that distinguishes this from set-viewport, so it is stated.
+        assert!(out.contains("layout viewport unchanged"), "{out}");
+    }
+
+    #[test]
+    fn test_format_keyboard_emulation_off_reports_restored_height() {
+        let out = format_keyboard_emulation(None, 844.0, OutputFormat::Text);
+        assert!(out.contains("cleared"), "{out}");
+        // The restored height rides along on `--off` too: it is the read-back
+        // that shows the shadow actually came off the live document.
+        assert!(out.contains("844"), "{out}");
+    }
+
+    #[test]
+    fn test_format_keyboard_emulation_json() {
+        let kb = KeyboardEmulation { inset: 336 };
+        let out = format_keyboard_emulation(Some(&kb), 508.0, OutputFormat::Json);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["action"], "emulate_keyboard");
+        assert_eq!(v["enabled"], true);
+        assert_eq!(v["inset"], 336);
+        assert_eq!(v["visual_viewport_height"], 508.0);
+
+        let off: serde_json::Value =
+            serde_json::from_str(&format_keyboard_emulation(None, 844.0, OutputFormat::Json))
+                .unwrap();
+        assert_eq!(off["enabled"], false);
+        assert_eq!(off["inset"], serde_json::Value::Null);
     }
 
     #[test]

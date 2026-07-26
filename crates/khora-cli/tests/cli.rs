@@ -952,6 +952,67 @@ fn test_emulate_touch_rejects_zero_max_points() {
 }
 
 #[test]
+fn test_emulate_keyboard_help() {
+    khora()
+        .args(["emulate-keyboard", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--off"))
+        // The layout/visual split is the entire reason the command exists, and
+        // the help is the only place a caller reaching for `set-viewport`
+        // instead will be told why that produces a green result on a real bug.
+        .stdout(predicate::str::contains(
+            "LAYOUT viewport is left untouched",
+        ))
+        .stdout(predicate::str::contains("set-viewport"))
+        // The rig cannot reproduce offsetTop, so the help says so rather than
+        // letting a fully green run imply an offsetTop translate was verified.
+        .stdout(predicate::str::contains("offsetTop"));
+}
+
+#[test]
+fn test_emulate_keyboard_nonexistent_session() {
+    khora()
+        .args(["emulate-keyboard", "nonexistent_xyz", "300"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_emulate_keyboard_requires_inset_or_off() {
+    // Neither given: the command has no sensible default — a bare invocation
+    // must not be read as "retract", which is what an Option<u32> with no
+    // group would silently do.
+    khora()
+        .args(["emulate-keyboard", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("required"));
+}
+
+#[test]
+fn test_emulate_keyboard_off_conflicts_with_inset() {
+    khora()
+        .args(["emulate-keyboard", "nonexistent_xyz", "300", "--off"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_emulate_keyboard_rejects_zero_inset() {
+    // A zero-pixel keyboard is a retraction wearing a number, and it would
+    // persist as `Some(0)` — a session that claims to be emulating a keyboard
+    // while every later command re-applies a no-op shadow.
+    khora()
+        .args(["emulate-keyboard", "nonexistent_xyz", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not in 1..=10000"));
+}
+
+#[test]
 fn test_reap_no_sessions() {
     khora().args(["reap"]).assert().success();
 }

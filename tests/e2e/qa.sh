@@ -1032,6 +1032,95 @@ assert_contains "off restores the real device" "$OUTPUT" "0"
 "$KHORA" emulate-touch "$SESSION" --off --max-points 3 >/dev/null 2>&1
 assert_exit "emulate-touch --off with --max-points is an error" "$?" 2
 
+# ── emulate-keyboard ─────────────────────────────────────
+
+printf "\n${BOLD}▸ emulate-keyboard${NC}\n"
+
+# Baseline: no keyboard, so the visual and layout viewports agree. Every
+# assert below is a *difference* from this pair, so pin it rather than assume
+# it — a run where the two already disagreed would make the whole section
+# vacuous.
+"$KHORA" emulate-keyboard "$SESSION" --off >/dev/null 2>&1
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+LAYOUT_H=$("$KHORA" eval "$SESSION" 'window.innerHeight' 2>&1 | tr -d '"')
+VISUAL_H=$("$KHORA" eval "$SESSION" 'Math.round(window.visualViewport.height)' 2>&1 | tr -d '"')
+assert_eq "without a keyboard, visual and layout viewports agree" "$VISUAL_H" "$LAYOUT_H"
+
+# The shell is sized from visualViewport.height, and 100dvh is its fallback —
+# so at baseline it is full height by both routes.
+OUTPUT=$("$KHORA" eval "$SESSION" 'Math.round(document.getElementById("kb-shell").getBoundingClientRect().height)' 2>&1 | tr -d '"')
+assert_eq "shell starts at full viewport height" "$OUTPUT" "$LAYOUT_H"
+
+OUTPUT=$("$KHORA" emulate-keyboard "$SESSION" 300 2>&1)
+EC=$?
+assert_exit "emulate-keyboard exits 0" "$EC" 0
+assert_contains "emulate-keyboard reports the inset" "$OUTPUT" "inset=300px"
+
+# The core claim, and the reason set-viewport cannot stand in: the visual
+# viewport shrank by exactly the inset while the layout viewport did not move
+# at all. Asserted as an equality, not a "smaller than" — a command that
+# shrank both would still pass a loose comparison on the first half.
+VISUAL_KB=$("$KHORA" eval "$SESSION" 'Math.round(window.visualViewport.height)' 2>&1 | tr -d '"')
+assert_eq "visual viewport shrinks by the inset" "$VISUAL_KB" "$((LAYOUT_H - 300))"
+OUTPUT=$("$KHORA" eval "$SESSION" 'window.innerHeight' 2>&1 | tr -d '"')
+assert_eq "layout viewport is untouched by the keyboard" "$OUTPUT" "$LAYOUT_H"
+
+# ...and the page's own listener — registered at load on the singleton, never
+# re-queried — actually received the event. Asserted through the height the
+# HANDLER recorded, not an event count: the browser emits its own resizes while
+# the window settles after the earlier sections, so a count would be measuring
+# the suite. This value can only have been written from inside the listener.
+OUTPUT=$("$KHORA" eval "$SESSION" 'window.__kbLastEvent' 2>&1 | tr -d '"')
+assert_eq "the page's own listener received the resize" "$OUTPUT" "$((LAYOUT_H - 300))"
+
+# Geometric consequence, which is what a QA run is actually after: the shell
+# followed the visual viewport instead of staying at its 100dvh fallback.
+OUTPUT=$("$KHORA" eval "$SESSION" 'Math.round(document.getElementById("kb-shell").getBoundingClientRect().height)' 2>&1 | tr -d '"')
+assert_eq "shell shrinks to clear the keyboard" "$OUTPUT" "$((LAYOUT_H - 300))"
+
+# The override is persisted on the session and re-applied on connect, so it
+# lands ahead of the navigation in the same invocation — an app reading
+# visualViewport.height at mount sees the keyboard, not the full height.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'JSON.stringify(window.__kbDetect)' 2>&1)
+assert_contains "keyboard survives navigate for load-time reads" "$OUTPUT" "\"visual\":$((LAYOUT_H - 300))"
+assert_contains "load-time layout viewport still full height" "$OUTPUT" "\"layout\":$LAYOUT_H"
+
+# A second inset replaces the first rather than compounding — the shadow reads
+# the prototype's getter each time, never its own previous value.
+"$KHORA" emulate-keyboard "$SESSION" 100 >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'Math.round(window.visualViewport.height)' 2>&1 | tr -d '"')
+assert_eq "a second inset replaces rather than compounds" "$OUTPUT" "$((LAYOUT_H - 100))"
+
+OUTPUT=$("$KHORA" emulate-keyboard "$SESSION" --off 2>&1)
+assert_contains "off reports cleared" "$OUTPUT" "cleared"
+OUTPUT=$("$KHORA" eval "$SESSION" 'Math.round(window.visualViewport.height)' 2>&1 | tr -d '"')
+assert_eq "off restores the real visual viewport" "$OUTPUT" "$LAYOUT_H"
+# Retracting is an event too — an app that only shrinks its shell on the way in
+# and never restores it would pass every assert above.
+OUTPUT=$("$KHORA" eval "$SESSION" 'window.__kbLastEvent' 2>&1 | tr -d '"')
+assert_eq "the listener received the retraction as well" "$OUTPUT" "$LAYOUT_H"
+# ...and stays off across a navigation, since nothing re-registers the script.
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'JSON.stringify(window.__kbDetect)' 2>&1)
+assert_contains "off survives navigate too" "$OUTPUT" "\"visual\":$LAYOUT_H"
+
+# The contrast that justifies the command existing at all, measured rather
+# than asserted in a comment: ask set-viewport for the same shrunken height and
+# BOTH viewports move, so a dvh-sized shell resizes itself and a keyboard bug
+# tested that way reports green. Done last because it perturbs innerHeight.
+"$KHORA" set-viewport "$SESSION" "390x$((LAYOUT_H - 300))" >/dev/null 2>&1
+SV_LAYOUT=$("$KHORA" eval "$SESSION" 'window.innerHeight' 2>&1 | tr -d '"')
+SV_VISUAL=$("$KHORA" eval "$SESSION" 'Math.round(window.visualViewport.height)' 2>&1 | tr -d '"')
+assert_eq "set-viewport shrinks the layout viewport too" "$SV_LAYOUT" "$((LAYOUT_H - 300))"
+assert_eq "...and so the two viewports still agree — no keyboard is simulated" "$SV_VISUAL" "$SV_LAYOUT"
+"$KHORA" set-viewport "$SESSION" --reset >/dev/null 2>&1
+
+"$KHORA" emulate-keyboard "$SESSION" >/dev/null 2>&1
+assert_exit "emulate-keyboard with no inset is an error" "$?" 2
+"$KHORA" emulate-keyboard "$SESSION" 300 --off >/dev/null 2>&1
+assert_exit "emulate-keyboard --off with an inset is an error" "$?" 2
+
 # ── JSON output format ──────────────────────────────────
 
 printf "\n${BOLD}▸ JSON format${NC}\n"

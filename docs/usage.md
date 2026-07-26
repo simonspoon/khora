@@ -611,6 +611,58 @@ does after every command, so khora persists the state and re-applies it on each
 connect. That re-apply runs before the navigation in the same invocation, which
 is what makes the load-time value land.
 
+### Emulating an on-screen keyboard
+
+A mobile keyboard shrinks the **visual** viewport and leaves the **layout**
+viewport alone. That asymmetry is the whole problem:
+
+| | shrinks with a browser toolbar | shrinks with a keyboard |
+|---|---|---|
+| layout viewport (`vh`, `dvh`, `%`, `position: fixed`) | `dvh` yes, `vh` no | **no** |
+| visual viewport (`window.visualViewport`) | yes | **yes** |
+
+So a `100dvh` app shell keeps believing it is full height while its bottom sits
+behind the keyboard, and every layout unit CSS offers agrees with it. It bites
+when the bottom of the shell is functional and not scrollable — a chat
+composer, a fixed action bar, a terminal whose last row is the prompt.
+
+```bash
+khora emulate-keyboard "$S" 336     # iOS-sized keyboard; Android ≈ 300
+khora emulate-keyboard "$S" --off   # retract it
+```
+
+**Do not reach for `set-viewport` instead.** It shrinks *both* viewports, so
+`dvh` follows, the shell resizes itself correctly, and the bug you are testing
+for disappears into a green result:
+
+```bash
+khora set-viewport "$S" 390x508     # innerHeight 508 AND visualViewport 508
+khora emulate-keyboard "$S" 336     # innerHeight 844, visualViewport 508  ← real
+```
+
+The dispatched `resize` reaches the app's own listener. Unlike `matchMedia()`,
+which hands back a fresh `MediaQueryList` per call — the reason media
+emulation needs real CDP support — `window.visualViewport` is a singleton, so
+it is the very object the page subscribed to.
+
+Assert a **geometric** consequence rather than a class or a state flag:
+
+```bash
+khora emulate-keyboard "$S" 336
+khora eval "$S" 'Math.round(document.querySelector(".composer").getBoundingClientRect().bottom)'
+khora eval "$S" 'window.innerHeight'   # unchanged — confirms the layout viewport held
+```
+
+Like media, touch and viewport emulation this sticks to the session and is
+re-applied on each connect, so it also lands ahead of a following `navigate`
+and is visible to an app that reads `visualViewport.height` at mount.
+
+**Not emulated: `visualViewport.offsetTop`.** A real browser makes it non-zero
+when it scrolls the layout viewport to keep a focused input above the keyboard.
+Nothing here is focused and nothing scrolls, so an `offsetTop`-based translate
+remains unverified even after a fully green run — say so in the report rather
+than letting the green imply otherwise.
+
 ### Screenshot comparison
 
 ```bash

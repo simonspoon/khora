@@ -10,7 +10,10 @@ use chromiumoxide::cdp::browser_protocol::input::{
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
 };
-use chromiumoxide::cdp::browser_protocol::page::{CaptureScreenshotFormat, Viewport};
+use chromiumoxide::cdp::browser_protocol::page::{
+    AddScriptToEvaluateOnNewDocumentParams, CaptureScreenshotFormat,
+    EnableParams as PageEnableParams, Viewport,
+};
 use chromiumoxide::cdp::browser_protocol::target::GetTargetsParams;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
@@ -19,7 +22,9 @@ use khora_core::element::{
     BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest,
 };
 use khora_core::error::{KhoraError, KhoraResult};
-use khora_core::session::{MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation};
+use khora_core::session::{
+    KeyboardEmulation, MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation,
+};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -85,6 +90,10 @@ pub struct CdpClient {
     touch: Option<TouchEmulation>,
     /// Viewport metrics carried by the session, re-applied for the same reason.
     viewport: Option<ViewportEmulation>,
+    /// On-screen-keyboard emulation carried by the session, re-applied for the
+    /// same reason — its page-side install rides on a CDP-session-scoped
+    /// `Page.addScriptToEvaluateOnNewDocument`, which dies with the connection.
+    keyboard: Option<KeyboardEmulation>,
 }
 
 impl CdpClient {
@@ -165,6 +174,7 @@ impl CdpClient {
             media: None,
             touch: None,
             viewport: None,
+            keyboard: None,
         };
 
         let client = Self {
@@ -175,6 +185,7 @@ impl CdpClient {
             media: None,
             touch: None,
             viewport: None,
+            keyboard: None,
         };
 
         Ok((client, session))
@@ -219,6 +230,7 @@ impl CdpClient {
             media: session.media.clone().filter(|m| !m.is_empty()),
             touch: session.touch,
             viewport: session.viewport,
+            keyboard: session.keyboard,
         })
     }
 
@@ -2109,6 +2121,53 @@ impl CdpClient {
         apply_touch(&page, touch).await
     }
 
+    /// Emulate an on-screen keyboard covering `keyboard.inset` CSS pixels of
+    /// the visual viewport, and deliver the `resize` the page is waiting for.
+    /// `None` retracts it. Returns the resulting `visualViewport.height`.
+    ///
+    /// Chrome cannot raise a keyboard and CDP models no such thing, so unlike
+    /// every neighbouring `emulate-*` this is page-side: the instance property
+    /// `window.visualViewport.height` is shadowed with a getter that subtracts
+    /// the inset from the real one. **The layout viewport is deliberately left
+    /// alone**, which is the entire point — a real keyboard shrinks only the
+    /// visual viewport, so `vh`/`dvh`/`%` and `position: fixed` keep believing
+    /// they have the full height. `set-viewport` shrinks both, so a keyboard
+    /// bug tested through it disappears into a green result.
+    ///
+    /// The dispatched `resize` is real delivery, not a synthetic stand-in:
+    /// `window.visualViewport` is a **singleton**, so it is the very object the
+    /// app registered its listener on. (Contrast `matchMedia()`, which hands
+    /// back a fresh `MediaQueryList` per call — the reason media emulation
+    /// needed a CDP command to be testable at all.)
+    ///
+    /// Not reproduced by this, and worth stating rather than assuming:
+    /// `visualViewport.offsetTop`, which a real browser makes non-zero when it
+    /// scrolls the layout viewport to keep a focused input above the keyboard.
+    /// Nothing here is focused and nothing scrolls, so an `offsetTop`-based
+    /// translate stays unverified after a fully green run.
+    pub async fn emulate_keyboard(&self, keyboard: Option<KeyboardEmulation>) -> KhoraResult<f64> {
+        // resolve_page() rather than get_or_create_page(): the latter would
+        // re-apply the session's *previous* inset first, and the page's own
+        // resize listener would see a spurious intermediate height on the way
+        // to the one being asked for — the same reason emulate_media and
+        // emulate_touch bypass the re-apply.
+        let page = self.resolve_page().await?;
+        apply_keyboard(&page, keyboard).await?;
+        // Dispatch only from the command, never from the per-connect re-apply:
+        // re-applying an unchanged inset must not look like a keyboard event.
+        let height = page
+            .evaluate(KEYBOARD_DISPATCH_JS)
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?
+            .into_value::<f64>()
+            .map_err(|e| {
+                KhoraError::Cdp(format!(
+                    "page reported no window.visualViewport height: {e}"
+                ))
+            })?;
+        Ok(height)
+    }
+
     /// List the browser's open targets, flagging the foreground tab and the
     /// one khora's other commands would drive.
     ///
@@ -2185,6 +2244,11 @@ impl CdpClient {
         }
         if let Some(viewport) = &self.viewport {
             apply_viewport(&page, Some(*viewport)).await?;
+        }
+        // Last, so the shadow's live getter reads a visual viewport that any
+        // device-metrics override above has already settled.
+        if let Some(keyboard) = &self.keyboard {
+            apply_keyboard(&page, Some(*keyboard)).await?;
         }
         Ok(page)
     }
@@ -2265,6 +2329,98 @@ impl CdpClient {
         // Fall back to the first page
         Ok(pages.into_iter().next())
     }
+}
+
+/// Shadow `visualViewport.height` with the real getter minus `__INSET__`.
+///
+/// The shadow is an *own* property on the singleton, over the accessor
+/// inherited from `VisualViewport.prototype`, so `delete` restores the genuine
+/// getter exactly. Reading the prototype descriptor each time — rather than
+/// caching a "real" height — keeps this composable with `set-viewport`: the
+/// emulated keyboard tracks whatever the real visual viewport becomes, and
+/// re-installing over an existing shadow cannot compound (the prototype getter
+/// is never the shadowed one).
+const KEYBOARD_INSTALL_JS: &str = r#"
+(() => {
+  const vv = window.visualViewport;
+  if (!vv) return null;
+  const real = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(vv), 'height');
+  if (!real || !real.get) return null;
+  const get = real.get;
+  Object.defineProperty(vv, 'height', {
+    get: () => get.call(vv) - __INSET__,
+    configurable: true,
+  });
+  return vv.height;
+})()
+"#;
+
+/// Drop the shadow, restoring the prototype's own getter.
+const KEYBOARD_CLEAR_JS: &str = r#"
+(() => {
+  const vv = window.visualViewport;
+  if (!vv) return null;
+  delete vv.height;
+  return vv.height;
+})()
+"#;
+
+/// Fire `resize` on the object the page subscribed to, and read back the height.
+const KEYBOARD_DISPATCH_JS: &str = r#"
+(() => {
+  const vv = window.visualViewport;
+  if (!vv) return null;
+  vv.dispatchEvent(new Event('resize'));
+  return vv.height;
+})()
+"#;
+
+/// Push an on-screen-keyboard state to a page, without dispatching `resize`.
+///
+/// Two installs, deliberately, because the shadow has two lifetimes to cover:
+///
+/// - `evaluate` fixes up the document already loaded;
+/// - `Page.addScriptToEvaluateOnNewDocument` puts it ahead of the *next*
+///   document's own scripts, so an app reading `visualViewport.height` at mount
+///   sees the keyboard rather than the full height.
+///
+/// The registration is scoped to this CDP session and dies with it, which is
+/// why the state is persisted on the session and re-applied on every connect.
+/// That also makes ordering automatic: `navigate` re-applies before it
+/// navigates, so emulate-then-navigate needs no discipline from the caller.
+async fn apply_keyboard(page: &Page, keyboard: Option<KeyboardEmulation>) -> KhoraResult<()> {
+    match keyboard {
+        Some(k) => {
+            let js = KEYBOARD_INSTALL_JS.replace("__INSET__", &k.inset.to_string());
+            // Chromium only installs the new-document hook while the Page
+            // domain is enabled on this CDP session; without this the
+            // registration is accepted and silently never fires.
+            page.execute(PageEnableParams::default())
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            let params = AddScriptToEvaluateOnNewDocumentParams::builder()
+                .source(js.clone())
+                .build()
+                .map_err(KhoraError::Cdp)?;
+            page.execute(params)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            page.evaluate(js)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+        None => {
+            // Only the live document needs clearing. The new-document script
+            // was registered on a CDP session that has since closed, so Chrome
+            // has already dropped it — there is nothing to unregister, and not
+            // re-registering it is what makes `--off` stick across navigations.
+            page.evaluate(KEYBOARD_CLEAR_JS)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 /// Push a media-emulation state to a page.

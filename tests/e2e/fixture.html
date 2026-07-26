@@ -136,6 +136,17 @@
   </div>
   <div id="pinch-result">contacts: 0 scale: 1.00</div>
 
+  <!-- emulate-keyboard: an app shell sized from visualViewport.height, the
+       real-world pattern the command exists to exercise. 100dvh is the
+       fallback, i.e. exactly what a keyboard-unaware app would use — so the
+       shell only shrinks if the emulated keyboard genuinely reached the
+       subscription. Kept at 200px wide for the same reason as pinch-target
+       above: a box wider than 390px moves window.innerWidth under --mobile. -->
+  <div id="kb-shell" style="width: 200px; height: 100dvh; background: #efe;">
+    shell
+  </div>
+  <div id="kb-result">h: 0 events: 0</div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -144,6 +155,48 @@
   </ul>
 
   <script>
+    // Visual-viewport / on-screen-keyboard subscriber (for emulate-keyboard).
+    // Subscribes at load to window.visualViewport — a singleton, so it is the
+    // very object the command dispatches on, and a delivered event proves real
+    // delivery rather than a synthetic stand-in. __kbDetect records the
+    // load-time reading so an override applied before navigate is observable.
+    (function () {
+      var vv = window.visualViewport;
+      var shell = document.getElementById('kb-shell');
+      var out = document.getElementById('kb-result');
+      var events = 0;
+      // Written ONLY from the resize handler, never from the initial paint, so
+      // it is positive evidence that an event was delivered carrying this
+      // height. A raw event *count* cannot do that job here: the browser emits
+      // its own resizes while the window settles, so a count proves only that
+      // something happened, not that our event arrived.
+      window.__kbLastEvent = null;
+      function apply() {
+        var h = vv ? vv.height : window.innerHeight;
+        // Overrides the 100dvh fallback in the style attribute. dvh tracks the
+        // browser's own toolbars, never the keyboard, so the two agree exactly
+        // until a keyboard is up — which is what makes this assert meaningful.
+        shell.style.height = h + 'px';
+        out.textContent = 'h: ' + Math.round(h) + ' events: ' + events;
+      }
+      if (vv) {
+        vv.addEventListener('resize', function () {
+          events++;
+          window.__kbLastEvent = Math.round(vv.height);
+          apply();
+        });
+      }
+      // Read at load, before any khora command could have patched this
+      // document — so `visual` differing from `layout` here can only mean the
+      // shadow was installed ahead of this script, which is the ordering
+      // guarantee the command's usefulness depends on.
+      window.__kbDetect = {
+        visual: vv ? vv.height : null,
+        layout: window.innerHeight
+      };
+      apply();
+    })();
+
     // Counter: click increments text and logs to console
     var counter = 0;
     document.getElementById('counter-btn').addEventListener('click', function() {
