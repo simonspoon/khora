@@ -16,6 +16,14 @@ brew install simonspoon/tap/khora
 
 Or download from [Releases](https://github.com/simonspoon/khora/releases).
 
+From source (needs [Rust](https://rustup.rs)):
+
+```bash
+git clone https://github.com/simonspoon/khora && cd khora
+./install.sh                     # -> ~/.cargo/bin/khora
+./install.sh --prefix /usr/local # -> /usr/local/bin/khora
+```
+
 ## Quick start
 
 ```bash
