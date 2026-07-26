@@ -109,6 +109,14 @@
   <div id="touch-result"></div>
   <div id="longpress-result">longpress: no</div>
 
+  <!-- touch-emulation target: its handler is registered ONLY behind load-time
+       feature detection, so a trusted tap reaches it only when the device
+       reported touch at document creation. -->
+  <div id="touch-gate" style="width: 200px; height: 100px; background: #efe; touch-action: none;">
+    gated tap
+  </div>
+  <div id="touch-gate-result">gated: no</div>
+
   <!-- find multiple elements -->
   <ul id="items">
     <li class="item">Alpha</li>
@@ -339,6 +347,25 @@
       document.getElementById('focus-next').addEventListener('focus', function() {
         out.textContent += 'next-focus,';
       });
+    })();
+
+    // Load-time touch feature detection, recorded as it stood when this
+    // document was created. `'ontouchstart' in window` is fixed at that point
+    // and cannot be moved afterwards, which is why `emulate-touch` has to run
+    // before the navigation rather than after it.
+    (function() {
+      window.__touchDetect = {
+        ontouchstart: 'ontouchstart' in window,
+        maxTouchPoints: navigator.maxTouchPoints,
+        coarse: matchMedia('(pointer: coarse)').matches
+      };
+      // The failure mode the command exists for: an app that attaches touch
+      // handlers only behind the check has none for a trusted tap to reach.
+      if (window.__touchDetect.ontouchstart) {
+        document.getElementById('touch-gate').addEventListener('touchstart', function(e) {
+          document.getElementById('touch-gate-result').textContent = 'gated: ' + e.isTrusted;
+        });
+      }
     })();
 
     // Eval test value

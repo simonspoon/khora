@@ -755,6 +755,64 @@ fn test_emulate_media_reset_conflicts_with_overrides() {
 }
 
 #[test]
+fn test_emulate_touch_help() {
+    khora()
+        .args(["emulate-touch", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--max-points"))
+        .stdout(predicate::str::contains("--off"))
+        // The load-time ordering is the whole reason the command exists, so the
+        // help must say it — a caller who runs it after `navigate` gets a page
+        // whose 'ontouchstart' check already ran.
+        .stdout(predicate::str::contains("BEFORE `navigate`"));
+}
+
+#[test]
+fn test_emulate_touch_nonexistent_session() {
+    khora()
+        .args(["emulate-touch", "nonexistent_xyz"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_emulate_touch_off_conflicts_with_max_points() {
+    khora()
+        .args([
+            "emulate-touch",
+            "nonexistent_xyz",
+            "--off",
+            "--max-points",
+            "3",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_emulate_touch_rejects_out_of_range_max_points() {
+    // Chrome caps maxTouchPoints at 16; reject at the CLI rather than letting
+    // CDP fail after a session has already been resolved.
+    khora()
+        .args(["emulate-touch", "nonexistent_xyz", "--max-points", "99"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("1..=16"));
+}
+
+#[test]
+fn test_emulate_touch_rejects_zero_max_points() {
+    khora()
+        .args(["emulate-touch", "nonexistent_xyz", "--max-points", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("1..=16"));
+}
+
+#[test]
 fn test_reap_no_sessions() {
     khora().args(["reap"]).assert().success();
 }

@@ -1,5 +1,5 @@
 use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest};
-use crate::session::{MediaEmulation, SessionInfo};
+use crate::session::{MediaEmulation, SessionInfo, TouchEmulation};
 
 /// Output format for CLI results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -43,6 +43,42 @@ pub fn format_media_emulation(media: &MediaEmulation, format: OutputFormat) -> S
             "color_scheme": media.color_scheme,
             "reduced_motion": media.reduced_motion,
             "forced_colors": media.forced_colors,
+        }))
+        .unwrap_or_default(),
+    }
+}
+
+/// Format the touch emulation now in effect for a session.
+///
+/// `ontouchstart_pending` is set when this call actually changed the state, and
+/// so the document currently loaded predates it and still reports the old
+/// `'ontouchstart' in window`. It is surfaced because that is the signal
+/// callers came for and the only one that needs a navigation to follow.
+pub fn format_touch_emulation(
+    touch: Option<&TouchEmulation>,
+    ontouchstart_pending: bool,
+    format: OutputFormat,
+) -> String {
+    match format {
+        OutputFormat::Text => {
+            let head = match touch {
+                Some(t) => format!(
+                    "Touch emulated: maxTouchPoints={} (pointer: coarse)",
+                    t.max_touch_points
+                ),
+                None => "Touch emulation cleared.".to_string(),
+            };
+            if ontouchstart_pending {
+                format!("{head}\nNavigate or reload for 'ontouchstart' in window to follow.")
+            } else {
+                head
+            }
+        }
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "action": "emulate_touch",
+            "enabled": touch.is_some(),
+            "max_touch_points": touch.map(|t| t.max_touch_points),
+            "ontouchstart_pending": ontouchstart_pending,
         }))
         .unwrap_or_default(),
     }
@@ -226,7 +262,34 @@ mod tests {
             created_at: 1700000000,
             data_dir: None,
             media: None,
+            touch: None,
         }
+    }
+
+    #[test]
+    fn test_format_touch_emulation_flags_the_pending_navigation() {
+        let touch = TouchEmulation {
+            max_touch_points: 5,
+        };
+        let out = format_touch_emulation(Some(&touch), true, OutputFormat::Text);
+        assert!(out.contains("maxTouchPoints=5"));
+        // The nudge is the whole usability of the command: without it a caller
+        // reads "touch emulated" and wonders why the loaded page disagrees.
+        assert!(out.contains("Navigate or reload"));
+
+        // Re-asserting the state the session already has changes nothing, so
+        // the loaded document is not stale and the nudge would be noise.
+        let out = format_touch_emulation(Some(&touch), false, OutputFormat::Text);
+        assert!(!out.contains("Navigate or reload"));
+    }
+
+    #[test]
+    fn test_format_touch_emulation_json_off() {
+        let out = format_touch_emulation(None, true, OutputFormat::Json);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["enabled"], serde_json::json!(false));
+        assert_eq!(v["max_touch_points"], serde_json::Value::Null);
+        assert_eq!(v["ontouchstart_pending"], serde_json::json!(true));
     }
 
     #[test]

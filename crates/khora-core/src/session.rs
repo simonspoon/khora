@@ -72,6 +72,21 @@ impl MediaEmulation {
     }
 }
 
+/// Touch-device emulation for a session (CDP
+/// `Emulation.setTouchEmulationEnabled`).
+///
+/// Persisted for the same reason as [`MediaEmulation`]: Chrome reverts the
+/// override the moment the CDP client that set it disconnects, which khora does
+/// after every command. Re-applying it on connect is also what makes it visible
+/// to a page's *load-time* feature detection, since `'ontouchstart' in window`
+/// is decided when the document is created — the re-apply lands before the
+/// navigation that follows it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TouchEmulation {
+    /// Value `navigator.maxTouchPoints` should report.
+    pub max_touch_points: u32,
+}
+
 /// Session info persisted to disk so CLI invocations can reconnect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
@@ -91,6 +106,10 @@ pub struct SessionInfo {
     /// Media features emulated for this session, re-applied on every connect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<MediaEmulation>,
+    /// Touch-device emulation for this session, re-applied on every connect.
+    /// `None` means the real device's capabilities are reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub touch: Option<TouchEmulation>,
 }
 
 impl SessionInfo {
@@ -179,6 +198,7 @@ mod tests {
             created_at: 1700000000,
             data_dir: None,
             media: None,
+            touch: None,
         }
     }
 
@@ -198,6 +218,28 @@ mod tests {
         let json = r#"{"id":"old","ws_url":"ws://x","pid":1,"headless":true,"created_at":0}"#;
         let parsed: SessionInfo = serde_json::from_str(json).unwrap();
         assert!(parsed.media.is_none());
+        assert!(parsed.touch.is_none());
+    }
+
+    #[test]
+    fn test_touch_emulation_roundtrip() {
+        let session = SessionInfo {
+            touch: Some(TouchEmulation {
+                max_touch_points: 5,
+            }),
+            ..sample_session()
+        };
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: SessionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.touch.unwrap().max_touch_points, 5);
+    }
+
+    #[test]
+    fn test_touch_emulation_omitted_when_off() {
+        // `--off` clears the field rather than writing `enabled: false`, so an
+        // older khora reading the file sees exactly what it would have written.
+        let json = serde_json::to_string(&sample_session()).unwrap();
+        assert!(!json.contains("touch"));
     }
 
     #[test]

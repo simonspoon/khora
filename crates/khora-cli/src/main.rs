@@ -201,6 +201,27 @@ enum Command {
         reset: bool,
     },
 
+    /// Emulate a touch device (navigator.maxTouchPoints, pointer: coarse)
+    ///
+    /// Run this BEFORE `navigate`: 'ontouchstart' in window is decided when the
+    /// document is created, so a page that feature-detects touch at load time
+    /// only sees it on the next navigation. maxTouchPoints and the pointer
+    /// media queries change immediately.
+    ///
+    /// The override sticks to the session and is re-applied on every later
+    /// command, because Chrome drops touch emulation when the CDP client that
+    /// set it disconnects — which khora does after each invocation.
+    EmulateTouch {
+        /// Session ID
+        session: String,
+        /// Value navigator.maxTouchPoints should report
+        #[arg(long, default_value_t = 5, value_parser = clap::value_parser!(u32).range(1..=16))]
+        max_points: u32,
+        /// Stop emulating touch and report the real device's capabilities
+        #[arg(long, conflicts_with = "max_points")]
+        off: bool,
+    },
+
     /// Find elements by CSS selector
     Find {
         /// Session ID
@@ -731,6 +752,40 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
             Ok(khora_core::output::format_media_emulation(
                 &effective, cli.format,
+            ))
+        }
+
+        Command::EmulateTouch {
+            session,
+            max_points,
+            off,
+        } => {
+            let requested = if *off {
+                None
+            } else {
+                Some(khora_core::session::TouchEmulation {
+                    max_touch_points: *max_points,
+                })
+            };
+
+            let mut session_info = khora_cdp::load_and_verify(session)?;
+            // Only a real change leaves the loaded document stale: re-asserting
+            // the state the session already has cannot invalidate a page that
+            // was navigated under it.
+            let changed = session_info.touch != requested;
+
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client.emulate_touch(requested).await?;
+
+            // Persist only after Chrome accepted it, so a rejected value can't
+            // leave later commands re-applying something that never worked.
+            session_info.touch = requested;
+            session_info.save()?;
+
+            Ok(khora_core::output::format_touch_emulation(
+                requested.as_ref(),
+                changed,
+                cli.format,
             ))
         }
 

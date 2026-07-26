@@ -94,6 +94,7 @@ khora launch --window-size 1366x768
 | `touch <session> <at>` | Tap at raw viewport point `X,Y` with trusted touch events — real `TouchEvent`s and `pointerType: touch`, which `click-at` never produces |
 | `swipe <session> <from> <to>` | Swipe between `X,Y` points with trusted touch events (`--steps`, `--delay` ms). The only way to exercise `touch-action`, which governs touch panning exclusively — `wheel` can't reach it |
 | `long-press <session> <at>` | Hold a touch at `X,Y` then release (`--duration` ms, default 600) — for context menus and drag-activation delays |
+| `emulate-touch <session>` | Report a touch device (`navigator.maxTouchPoints`, `pointer: coarse`, `ontouchstart`) so load-time feature detection registers touch handlers — run it **before** `navigate`. `--max-points N`, `--off`. Sticks to the session |
 | `screenshot <session>` | Capture screenshot — whole page by default, `--viewport` for the visible area, `--selector` to crop to an element, `--clip X,Y,WxH` for an explicit region |
 | `text <session> <selector>` | Get text content of matching elements |
 | `attribute <session> <selector> <attr>` | Get attribute value |

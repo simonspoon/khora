@@ -160,6 +160,7 @@ mod tests {
             created_at: now_secs(),
             data_dir: None,
             media: None,
+            touch: None,
         }
     }
 

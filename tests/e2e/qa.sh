@@ -868,6 +868,71 @@ assert_contains "reset restores Chrome defaults" "$OUTPUT" "false"
 "$KHORA" emulate-media "$SESSION" >/dev/null 2>&1
 assert_exit "emulate-media with no flags is an error" "$?" 2
 
+# ── emulate-touch ────────────────────────────────────────
+
+printf "\n${BOLD}▸ emulate-touch${NC}\n"
+
+# Baseline first: asserting "touch is detected" without pinning the starting
+# value would pass on any host that already reports a touch device.
+"$KHORA" emulate-touch "$SESSION" --off >/dev/null 2>&1
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'JSON.stringify(window.__touchDetect)' 2>&1)
+assert_contains "without emulation, load-time ontouchstart is false" "$OUTPUT" '"ontouchstart":false'
+assert_contains "without emulation, load-time maxTouchPoints is 0" "$OUTPUT" '"maxTouchPoints":0'
+
+# ...and the gated handler was therefore never registered, so a trusted tap
+# lands on nothing. This is the gap the command closes; the assert below is
+# only meaningful because this one holds.
+TOUCH_POINT=$(touch_point touch-gate 0.5)
+"$KHORA" touch "$SESSION" "$TOUCH_POINT" >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#touch-gate-result" 2>&1)
+assert_contains "touch-gated handler is unreachable without emulation" "$OUTPUT" "gated: no"
+
+OUTPUT=$("$KHORA" emulate-touch "$SESSION" 2>&1)
+EC=$?
+assert_exit "emulate-touch exits 0" "$EC" 0
+assert_contains "emulate-touch reports the touch points" "$OUTPUT" "maxTouchPoints=5"
+
+# maxTouchPoints and the pointer media queries move immediately, on a page
+# that has not navigated since — and only because the override is persisted on
+# the session and re-applied on connect, since Chrome drops it when the
+# setting client disconnects, which khora does after every command.
+OUTPUT=$("$KHORA" eval "$SESSION" 'navigator.maxTouchPoints' 2>&1)
+assert_contains "maxTouchPoints survives into a later invocation" "$OUTPUT" "5"
+OUTPUT=$("$KHORA" eval "$SESSION" 'matchMedia("(pointer: coarse)").matches' 2>&1)
+assert_contains "pointer: coarse matches without any device-metrics override" "$OUTPUT" "true"
+
+# 'ontouchstart' in window is fixed when the document is created, so it only
+# follows on the next navigation — the ordering the command's help documents.
+OUTPUT=$("$KHORA" eval "$SESSION" 'JSON.stringify(window.__touchDetect)' 2>&1)
+assert_contains "already-loaded document keeps its load-time ontouchstart" "$OUTPUT" '"ontouchstart":false'
+
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+OUTPUT=$("$KHORA" eval "$SESSION" 'JSON.stringify(window.__touchDetect)' 2>&1)
+assert_contains "after navigate, load-time ontouchstart is true" "$OUTPUT" '"ontouchstart":true'
+assert_contains "after navigate, load-time coarse pointer is true" "$OUTPUT" '"coarse":true'
+
+# The payoff: the handler the app registers only behind that check now exists,
+# and a trusted tap reaches it.
+TOUCH_POINT=$(touch_point touch-gate 0.5)
+"$KHORA" touch "$SESSION" "$TOUCH_POINT" >/dev/null 2>&1
+OUTPUT=$("$KHORA" text "$SESSION" "#touch-gate-result" 2>&1)
+assert_contains "touch-gated handler receives a trusted tap" "$OUTPUT" "gated: true"
+
+OUTPUT=$("$KHORA" emulate-touch "$SESSION" --max-points 1 2>&1)
+assert_contains "max-points is honored" "$OUTPUT" "maxTouchPoints=1"
+OUTPUT=$("$KHORA" eval "$SESSION" 'navigator.maxTouchPoints' 2>&1)
+assert_contains "max-points reaches the page" "$OUTPUT" "1"
+
+OUTPUT=$("$KHORA" emulate-touch "$SESSION" --off 2>&1)
+assert_contains "off reports cleared" "$OUTPUT" "cleared"
+OUTPUT=$("$KHORA" eval "$SESSION" 'navigator.maxTouchPoints' 2>&1)
+assert_contains "off restores the real device" "$OUTPUT" "0"
+"$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+
+"$KHORA" emulate-touch "$SESSION" --off --max-points 3 >/dev/null 2>&1
+assert_exit "emulate-touch --off with --max-points is an error" "$?" 2
+
 # ── JSON output format ──────────────────────────────────
 
 printf "\n${BOLD}▸ JSON format${NC}\n"

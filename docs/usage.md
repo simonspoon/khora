@@ -461,17 +461,56 @@ P=$(khora eval "$S" '(function(){var e=document.querySelector(".card");
 khora touch "$S" "$P"
 ```
 
-**Known limitation.** These commands do not turn on CDP touch *emulation*
-(`Emulation.setTouchEmulationEnabled`), because it buys nothing here:
-dispatch, native panning and `pointerType` are identical with and without it,
-and Chrome reverts the override when the CDP client disconnects — which khora
-does after every command — so it could never survive to be read by the next
-one anyway. The consequence is that a page's **load-time feature detection**
-still reports a non-touch device: `'ontouchstart' in window` is `false`,
-`navigator.maxTouchPoints` is `0`, and `(pointer: coarse)` does not match. An
-app that registers touch handlers only behind such a check won't have any for
-these events to reach. Apps that always attach touch listeners (the common
-case, including dnd-kit) are unaffected.
+These commands do not turn on touch *emulation* themselves, because it buys
+nothing for dispatch: the events, native panning and `pointerType` are
+identical with and without it. What it changes is what the page *believes*
+about the device — see below.
+
+### Touch feature detection
+
+By default a page's feature detection reports a non-touch device:
+`'ontouchstart' in window` is `false`, `navigator.maxTouchPoints` is `0`, and
+`(pointer: coarse)` does not match. An app that registers touch handlers only
+behind such a check has none for a trusted tap to reach. (Apps that always
+attach touch listeners — the common case, including dnd-kit — are unaffected.)
+
+`emulate-touch` makes Chrome report a touch device (CDP
+`Emulation.setTouchEmulationEnabled`):
+
+```bash
+khora emulate-touch "$S"                    # maxTouchPoints=5, pointer: coarse
+khora emulate-touch "$S" --max-points 1     # single-touch device
+khora emulate-touch "$S" --off              # back to the real device
+```
+
+**Run it before `navigate`.** The three signals do not arrive together:
+
+| signal | when it changes |
+|---|---|
+| `navigator.maxTouchPoints` | immediately |
+| `(pointer: coarse)`, `(any-pointer: coarse)`, `(hover: none)` | immediately |
+| `'ontouchstart' in window` | only on the next document |
+
+`ontouchstart` is installed on the window when the document is created, so an
+already-loaded page keeps reporting the old value until it navigates or
+reloads — and that is precisely the value load-time detection reads. So the
+working order is emulate, then navigate:
+
+```bash
+khora emulate-touch "$S"
+khora navigate "$S" "https://app.com"       # detection now sees a touch device
+khora touch "$S" 150,220                    # ...so the gated handler exists
+```
+
+Note that no device-metrics override is needed for the pointer and hover
+queries — touch emulation alone moves them. Pair it with `set-viewport` only
+when you also want phone dimensions.
+
+Like media emulation, this sticks to the session: Chrome reverts the override
+when the CDP client that set it disconnects, which khora does after every
+command, so khora persists the state and re-applies it on each connect. That
+re-apply runs before the navigation in the same invocation, which is what makes
+the load-time value land.
 
 ### Screenshot comparison
 

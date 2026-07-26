@@ -1,6 +1,7 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::cdp::browser_protocol::emulation::{
     MediaFeature, SetDeviceMetricsOverrideParams, SetEmulatedMediaParams,
+    SetTouchEmulationEnabledParams,
 };
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
@@ -18,7 +19,7 @@ use khora_core::element::{
     BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest,
 };
 use khora_core::error::{KhoraError, KhoraResult};
-use khora_core::session::{MediaEmulation, SessionInfo};
+use khora_core::session::{MediaEmulation, SessionInfo, TouchEmulation};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -72,6 +73,8 @@ pub struct CdpClient {
     /// Media emulation carried by the session, re-applied to each page this
     /// client resolves — Chrome drops it when the previous command disconnected.
     media: Option<MediaEmulation>,
+    /// Touch emulation carried by the session, re-applied for the same reason.
+    touch: Option<TouchEmulation>,
 }
 
 impl CdpClient {
@@ -150,6 +153,7 @@ impl CdpClient {
             created_at,
             data_dir: Some(data_dir.clone()),
             media: None,
+            touch: None,
         };
 
         let client = Self {
@@ -158,6 +162,7 @@ impl CdpClient {
             data_dir: Some(data_dir),
             pid,
             media: None,
+            touch: None,
         };
 
         Ok((client, session))
@@ -200,6 +205,7 @@ impl CdpClient {
             data_dir: None,
             pid: session.pid,
             media: session.media.clone().filter(|m| !m.is_empty()),
+            touch: session.touch,
         })
     }
 
@@ -1397,16 +1403,15 @@ impl CdpClient {
     /// (`pointerdown`/`pointerup`, `mousedown`/`mouseup`, `click`), all
     /// `isTrusted` — verified live, see `tests/e2e/qa.sh`.
     ///
-    /// Note that none of the touch commands turn on CDP touch *emulation*
-    /// (`Emulation.setTouchEmulationEnabled`), because measurement showed it
-    /// buys nothing here: dispatch, native panning and `pointerType` are
-    /// identical with and without it, and — since khora reconnects per
-    /// command and Chrome reverts the override on disconnect — it cannot
-    /// survive to be read by a later command anyway. The consequence is that
-    /// a page's *load-time* feature detection (`'ontouchstart' in window`,
-    /// `navigator.maxTouchPoints`, `(pointer: coarse)`) still reports a
-    /// non-touch device, so an app that registers touch handlers only behind
-    /// such a check won't have any for these events to reach.
+    /// The touch commands do not turn on CDP touch *emulation* themselves,
+    /// because measurement showed it buys nothing for dispatch: the events,
+    /// native panning and `pointerType` are identical with and without it.
+    /// What it does change is what a page *believes* about the device, which
+    /// matters before any of these events are sent — an app that registers
+    /// touch handlers only behind a `'ontouchstart' in window` check has none
+    /// for a trusted tap to reach. That is the separate, session-persisted
+    /// [`Self::emulate_touch`]; run it before `navigate` so the page's
+    /// load-time detection sees a touch device.
     pub async fn touch(&self, at: (f64, f64), timeout_ms: u64) -> KhoraResult<()> {
         let page = self.get_or_create_page().await?;
         self.dispatch_touch_event(
@@ -1979,6 +1984,38 @@ impl CdpClient {
         apply_media(&page, media).await
     }
 
+    /// Emulate a touch device on the current page (CDP
+    /// `Emulation.setTouchEmulationEnabled`). `None` restores the real
+    /// device's capabilities.
+    ///
+    /// Like media emulation this dies with the CDP connection, so the caller
+    /// persists it on the session and `connect()` reloads it — that re-apply is
+    /// the whole point of the command, because it runs *before* the navigation
+    /// in the same invocation and so lands in time for a page's load-time
+    /// feature detection.
+    ///
+    /// The three signals do not turn on together (measured, headless Chrome
+    /// 150 / chromiumoxide 0.9.1):
+    ///
+    /// | signal | when it flips |
+    /// |---|---|
+    /// | `navigator.maxTouchPoints` | immediately |
+    /// | `(pointer: coarse)`, `(any-pointer: coarse)`, `(hover: none)` | immediately |
+    /// | `'ontouchstart' in window` | only on the next document |
+    ///
+    /// `ontouchstart` is installed on the window when the document is created,
+    /// so an already-loaded page keeps reporting the old value until it
+    /// navigates or reloads. Notably no device-metrics override is needed for
+    /// the pointer/hover queries — touch emulation alone moves them.
+    pub async fn emulate_touch(&self, touch: Option<TouchEmulation>) -> KhoraResult<()> {
+        // resolve_page() rather than get_or_create_page(): re-applying the
+        // session's *previous* touch state first would push the page through a
+        // spurious `(pointer: coarse)` transition on the way to the one asked
+        // for, which any matchMedia listener would see.
+        let page = self.resolve_page().await?;
+        apply_touch(&page, touch).await
+    }
+
     /// List the browser's open targets, flagging the foreground tab and the
     /// one khora's other commands would drive.
     ///
@@ -2049,6 +2086,9 @@ impl CdpClient {
         let page = self.resolve_page().await?;
         if let Some(media) = &self.media {
             apply_media(&page, media).await?;
+        }
+        if let Some(touch) = &self.touch {
+            apply_touch(&page, Some(*touch)).await?;
         }
         Ok(page)
     }
@@ -2147,6 +2187,27 @@ async fn apply_media(page: &Page, media: &MediaEmulation) -> KhoraResult<()> {
                 .collect::<Vec<_>>(),
         )
         .build();
+    page.execute(params)
+        .await
+        .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+    Ok(())
+}
+
+/// Push a touch-emulation state to a page. `None` disables the override.
+///
+/// Disabling is sent explicitly rather than skipped: the page may still be
+/// showing a document created while emulation was on, and while that document's
+/// `'ontouchstart' in window` cannot be taken back, `navigator.maxTouchPoints`
+/// and the pointer media queries drop back immediately.
+async fn apply_touch(page: &Page, touch: Option<TouchEmulation>) -> KhoraResult<()> {
+    // Chrome rejects a zero. The CLI already bounds this to 1..=16, so the
+    // clamp only covers a library caller building the struct directly.
+    let max_touch_points = touch.map_or(1, |t| t.max_touch_points).max(1);
+    let params = SetTouchEmulationEnabledParams::builder()
+        .enabled(touch.is_some())
+        .max_touch_points(i64::from(max_touch_points))
+        .build()
+        .map_err(KhoraError::Cdp)?;
     page.execute(params)
         .await
         .map_err(|e| KhoraError::Cdp(e.to_string()))?;
