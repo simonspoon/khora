@@ -148,6 +148,24 @@ assert_contains "session is alive" "$OUTPUT" "alive"
 # dropping to raw CDP for something khora has no command for doesn't have to
 # parse ~/.khora/sessions/<id>.json to find it (mesa task 572).
 assert_contains "status names the session's WebSocket URL" "$OUTPUT" "ws://"
+# mesa task 568: `alive` only says the Chrome process is still there. These
+# three layers say it still answers — the reported incident had `eval` working
+# while `wheel` timed out, so a session can be alive and unusable at once.
+assert_contains "status probes the protocol layer" "$OUTPUT" "protocol"
+assert_contains "status probes the renderer layer" "$OUTPUT" "renderer"
+assert_contains "status probes the compositor layer" "$OUTPUT" "compositor"
+assert_contains "a healthy session reports no unresponsive layer" \
+    "$(printf '%s' "$OUTPUT" | grep -c UNRESPONSIVE)" "0"
+
+OUTPUT=$("$KHORA" status "$SESSION" --check 2>&1)
+EC=$?
+assert_exit "status --check exits 0 on a healthy session" "$EC" 0
+
+OUTPUT=$("$KHORA" -f json status "$SESSION" 2>&1)
+assert_contains "json status carries the flat healthy bit" "$OUTPUT" '"healthy": true'
+# Regression guard: health was added alongside these, not in place of them.
+assert_contains "json status still carries pid" "$OUTPUT" '"pid"'
+assert_contains "json status still carries headless" "$OUTPUT" '"headless"'
 
 # Smoke check for mesa task 386: mouse_move on a never-painted page (the
 # fresh about:blank tab a launch starts on, before any navigate) is where a

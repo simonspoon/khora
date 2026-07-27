@@ -1,4 +1,5 @@
 use chromiumoxide::browser::{Browser, BrowserConfig};
+use chromiumoxide::cdp::browser_protocol::browser::GetVersionParams;
 use chromiumoxide::cdp::browser_protocol::emulation::{
     ClearDeviceMetricsOverrideParams, MediaFeature, SetDeviceMetricsOverrideParams,
     SetEmulatedMediaParams, SetTouchEmulationEnabledParams,
@@ -19,7 +20,8 @@ use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
 use khora_core::element::{
-    BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest,
+    BoundingBox, BrowserTarget, ConsoleMessage, ElementInfo, HealthCheck, NetworkRequest,
+    SessionHealth,
 };
 use khora_core::error::{KhoraError, KhoraResult};
 use khora_core::session::{
@@ -1705,18 +1707,8 @@ impl CdpClient {
     /// rather than fail the caller over a side-effect nudge, and cap the
     /// wait so a wedged nudge can't turn a fast call into a slow one.
     async fn force_compositor_frame(&self, page: &Page) {
-        let params = ScreenshotParams::builder()
-            .format(CaptureScreenshotFormat::Png)
-            .clip(Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-                scale: 1.0,
-            })
-            .build();
         if let Err(e) =
-            tokio::time::timeout(std::time::Duration::from_secs(3), page.screenshot(params)).await
+            tokio::time::timeout(std::time::Duration::from_secs(3), capture_1x1(page)).await
         {
             tracing::debug!("force_compositor_frame timed out: {e}");
         }
@@ -2168,6 +2160,118 @@ impl CdpClient {
         Ok(height)
     }
 
+    /// Probe how responsive the session's browser actually is, layer by layer.
+    ///
+    /// `is_alive()` answers a different, weaker question — whether *this
+    /// process* still has a live handler task — and so reports "alive" for a
+    /// browser that has stopped answering. This puts three bounded round-trips
+    /// on the wire instead, ordered by how much of the browser each needs, so
+    /// the report names the deepest layer still working rather than just
+    /// failing.
+    ///
+    /// The layering is the whole point and not defensive over-engineering: on
+    /// the incident this was written for (mesa task 557), `eval`, `click-at`
+    /// and `wait-for` all worked while `wheel` timed out at 5s and 15s. A
+    /// single `Runtime.evaluate` probe would have called that session healthy.
+    /// `wheel` is the command that needs a compositor frame, so the compositor
+    /// gets its own probe — the same 1x1 capture the trusted-input commands
+    /// already use to pre-warm it.
+    ///
+    /// Each layer is bounded by `budget` independently: a healthy session
+    /// answers all three in well under one, and only a genuinely wedged one
+    /// pays the wait — which is the diagnosis being asked for. Read-only, like
+    /// `targets`: it uses `find_page()` and never manufactures a tab, since a
+    /// fresh `about:blank` would be a page whose health says nothing about the
+    /// one you were driving.
+    pub async fn health(&self, budget: std::time::Duration) -> SessionHealth {
+        async fn timed<F, T, E>(budget: std::time::Duration, f: F) -> HealthCheck
+        where
+            F: std::future::Future<Output = Result<T, E>>,
+            E: std::fmt::Display,
+        {
+            let started = std::time::Instant::now();
+            let outcome = tokio::time::timeout(budget, f).await;
+            let ms = started.elapsed().as_millis() as u64;
+            match outcome {
+                Ok(Ok(_)) => HealthCheck {
+                    ok: Some(true),
+                    ms,
+                    detail: None,
+                },
+                Ok(Err(e)) => HealthCheck {
+                    ok: Some(false),
+                    ms,
+                    detail: Some(e.to_string()),
+                },
+                Err(_) => HealthCheck {
+                    ok: Some(false),
+                    ms,
+                    detail: Some(format!("timed out after {}ms", budget.as_millis())),
+                },
+            }
+        }
+
+        let protocol = timed(budget, self.browser.execute(GetVersionParams::default())).await;
+
+        // Only the protocol layer can be probed without a page. Resolving one
+        // is itself a round-trip that reaches into the renderer — measured on
+        // a page busy-looping its main thread, `find_page()` is what blocks,
+        // before `evaluate` is ever reached. So a JS-thread wedge surfaces
+        // here, and both page-scoped layers have to inherit that one verdict:
+        // neither was reached, and calling either a healthy skip would be the
+        // false green this command exists to prevent.
+        let resolve_started = std::time::Instant::now();
+        let resolved = tokio::time::timeout(budget, self.find_page()).await;
+        let resolve_ms = resolve_started.elapsed().as_millis() as u64;
+        let unreached = |detail: String| SessionHealth {
+            protocol: protocol.clone(),
+            renderer: HealthCheck {
+                ok: Some(false),
+                ms: resolve_ms,
+                detail: Some(detail.clone()),
+            },
+            compositor: HealthCheck {
+                ok: Some(false),
+                ms: resolve_ms,
+                detail: Some(detail),
+            },
+        };
+        let page = match resolved {
+            Ok(Ok(Some(page))) => Some(page),
+            Ok(Ok(None)) => None,
+            Ok(Err(e)) => return unreached(format!("could not resolve a page: {e}")),
+            Err(_) => {
+                return unreached(format!(
+                    "resolving a page timed out after {}ms",
+                    budget.as_millis()
+                ))
+            }
+        };
+
+        let Some(page) = page else {
+            // A browser with no tab open is idle, not sick. Condemning it here
+            // would make `--check` fail a session that a `navigate` would
+            // revive perfectly.
+            let reason = "browser has no page open";
+            return SessionHealth {
+                protocol,
+                renderer: HealthCheck::skipped(reason),
+                compositor: HealthCheck::skipped(reason),
+            };
+        };
+
+        // `1` rather than a bare literal: the value is irrelevant, what is
+        // being measured is whether the renderer's JS thread answers at all.
+        let renderer = timed(budget, page.evaluate("1")).await;
+        let compositor = timed(budget, capture_1x1(&page)).await;
+
+        SessionHealth {
+            protocol,
+            renderer,
+            compositor,
+        }
+    }
+
     /// List the browser's open targets, flagging the foreground tab and the
     /// one khora's other commands would drive.
     ///
@@ -2375,6 +2479,25 @@ const KEYBOARD_DISPATCH_JS: &str = r#"
   return vv.height;
 })()
 "#;
+
+/// Capture a 1x1 PNG — the cheapest CDP call that makes the compositor
+/// produce a frame, and therefore both the pre-warm nudge the trusted-input
+/// commands need and the health probe's compositor layer. Unbounded on
+/// purpose: the two callers want different bounds, and a wedged compositor is
+/// exactly what one of them is trying to measure.
+async fn capture_1x1(page: &Page) -> Result<Vec<u8>, chromiumoxide::error::CdpError> {
+    let params = ScreenshotParams::builder()
+        .format(CaptureScreenshotFormat::Png)
+        .clip(Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+            scale: 1.0,
+        })
+        .build();
+    page.screenshot(params).await
+}
 
 /// Push an on-screen-keyboard state to a page, without dispatching `resize`.
 ///

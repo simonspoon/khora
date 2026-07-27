@@ -127,7 +127,7 @@ khora launch --window-size 1366x768
 | `console <session>` | Read console messages |
 | `eval <session> <js>` | Execute JavaScript, return result |
 | `kill <session>` | Close browser and clean up (`--all` to kill every session) |
-| `status [session]` | Check session status and report its CDP WebSocket URL (or list all) |
+| `status [session] [--check]` | Check session status, probe whether the browser still responds, and report its CDP WebSocket URL (or list all) |
 | `network <session>` | List captured network requests (`fetch` and `XMLHttpRequest`) |
 | `reap` | Remove sessions whose Chrome died (`--all` to also kill live sessions, `--older-than <dur>` for age-based cleanup, e.g. `30m`, `2h`, `24h`, `--purge-data-dirs` to also delete orphaned Chrome profiles) |
 

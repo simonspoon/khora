@@ -12,6 +12,13 @@ pub enum KhoraError {
     #[error("session expired or Chrome process died: {0}")]
     SessionDead(String),
 
+    /// The Chrome process is still running but some layer of it stopped
+    /// answering. Distinct from `SessionDead` because the process is alive and
+    /// `kill` still has something to signal, but shares its exit code: to a
+    /// caller both mean "stop driving this session, relaunch it".
+    #[error("session is degraded: {0}")]
+    SessionUnhealthy(String),
+
     #[error("navigation failed: {0}")]
     NavigationFailed(String),
 
@@ -52,7 +59,9 @@ impl KhoraError {
         match self {
             KhoraError::ChromeNotFound => 2,
             KhoraError::Timeout(_) => 3,
-            KhoraError::SessionNotFound(_) | KhoraError::SessionDead(_) => 4,
+            KhoraError::SessionNotFound(_)
+            | KhoraError::SessionDead(_)
+            | KhoraError::SessionUnhealthy(_) => 4,
             _ => 1,
         }
     }
@@ -82,6 +91,17 @@ mod tests {
     #[test]
     fn test_exit_code_session_dead() {
         assert_eq!(KhoraError::SessionDead("abc".into()).exit_code(), 4);
+    }
+
+    #[test]
+    fn test_exit_code_session_unhealthy_matches_dead() {
+        // A degraded session and a dead one call for the same caller response
+        // — relaunch — so they must not be told apart by exit code.
+        assert_eq!(KhoraError::SessionUnhealthy("abc".into()).exit_code(), 4);
+        assert_eq!(
+            KhoraError::SessionUnhealthy("abc: renderer unresponsive".into()).to_string(),
+            "session is degraded: abc: renderer unresponsive"
+        );
     }
 
     #[test]

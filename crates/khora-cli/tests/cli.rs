@@ -756,6 +756,27 @@ fn test_status_nonexistent_session() {
 }
 
 #[test]
+fn test_status_check_flag_documented() {
+    khora()
+        .args(["status", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--check"))
+        .stdout(predicate::str::contains("unresponsive"));
+}
+
+#[test]
+fn test_status_check_on_nonexistent_session_exits_4() {
+    // `--check` must not turn a missing session into a different failure than
+    // the bare command: both are "stop driving this session", exit 4.
+    khora()
+        .args(["status", "nonexistent_xyz", "--check"])
+        .assert()
+        .code(4)
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
 fn test_navigate_nonexistent_session() {
     khora()
         .args(["navigate", "nonexistent_xyz", "https://example.com"])

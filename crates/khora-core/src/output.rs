@@ -1,4 +1,4 @@
-use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest};
+use crate::element::{BrowserTarget, ConsoleMessage, ElementInfo, NetworkRequest, SessionHealth};
 use crate::session::{
     KeyboardEmulation, MediaEmulation, SessionInfo, TouchEmulation, ViewportEmulation,
 };
@@ -302,6 +302,69 @@ pub fn format_targets(targets: &[BrowserTarget], format: OutputFormat) -> String
             lines.join("\n")
         }
         OutputFormat::Json => serde_json::to_string_pretty(targets).unwrap_or_default(),
+    }
+}
+
+/// Render a single session's `status`, including the per-layer health probe.
+///
+/// `alive` and `health` answer different questions and both are reported:
+/// `alive` is whether the Chrome process is still there, `health` is whether
+/// it still answers. The failure this exists for is the pair
+/// `alive: true, healthy: false` — a browser that is running and no longer
+/// usable, which every other command discovers one timeout at a time.
+pub fn format_status(
+    info: &SessionInfo,
+    alive: bool,
+    health: &SessionHealth,
+    format: OutputFormat,
+) -> String {
+    let session = &info.id;
+    let ws_url = &info.ws_url;
+    match format {
+        OutputFormat::Text => {
+            let state = if !alive {
+                "dead"
+            } else if health.healthy() {
+                "alive"
+            } else {
+                "degraded"
+            };
+            let mut lines = vec![format!("Session {session} is {state}")];
+            for (name, check) in health.layers() {
+                let verdict = match check.ok {
+                    Some(true) => "ok",
+                    Some(false) => "UNRESPONSIVE",
+                    None => "-",
+                };
+                let detail = match &check.detail {
+                    Some(d) => format!(" ({d})"),
+                    None => String::new(),
+                };
+                lines.push(format!(
+                    "  {name:<12} {verdict:<13} {ms}ms{detail}",
+                    ms = check.ms
+                ));
+            }
+            // The WebSocket URL carries the browser's CDP port, which is what
+            // anyone dropping to raw CDP for something khora has no command
+            // for needs; without it here the only source is the session JSON
+            // on disk.
+            lines.push(format!("WebSocket: {ws_url}"));
+            lines.join("\n")
+        }
+        OutputFormat::Json => serde_json::to_string_pretty(&serde_json::json!({
+            "session": session,
+            "alive": alive,
+            // `healthy` is the flat one-bit answer a script wants
+            // (`jq -e .healthy`); `health` is the per-layer detail that says
+            // which part of the browser stopped.
+            "healthy": health.healthy(),
+            "health": health,
+            "pid": info.pid,
+            "headless": info.headless,
+            "ws_url": ws_url,
+        }))
+        .unwrap_or_default(),
     }
 }
 
@@ -615,6 +678,100 @@ mod tests {
         assert!(output.contains("GET"));
         assert!(output.contains("200"));
         assert!(output.contains("https://example.com/api"));
+    }
+
+    fn sample_status_session() -> SessionInfo {
+        SessionInfo {
+            id: "abc123".to_string(),
+            ws_url: "ws://127.0.0.1:9222/devtools/browser/x".to_string(),
+            pid: 4242,
+            headless: true,
+            created_at: 0,
+            data_dir: None,
+            media: None,
+            touch: None,
+            viewport: None,
+            keyboard: None,
+        }
+    }
+
+    fn wedged_compositor() -> crate::element::SessionHealth {
+        use crate::element::{HealthCheck, SessionHealth};
+        let ok = |ms| HealthCheck {
+            ok: Some(true),
+            ms,
+            detail: None,
+        };
+        SessionHealth {
+            protocol: ok(4),
+            renderer: ok(11),
+            compositor: HealthCheck {
+                ok: Some(false),
+                ms: 5000,
+                detail: Some("timed out after 5000ms".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn test_format_status_text_reports_degraded_not_alive() {
+        // The pair this command exists to name: the process is up, so the old
+        // `alive` bit says yes, while the browser has stopped answering.
+        let out = format_status(
+            &sample_status_session(),
+            true,
+            &wedged_compositor(),
+            OutputFormat::Text,
+        );
+        assert!(out.contains("Session abc123 is degraded"), "got {out}");
+        assert!(!out.contains("is alive"), "got {out}");
+        assert!(out.contains("compositor"), "got {out}");
+        assert!(out.contains("UNRESPONSIVE"), "got {out}");
+        assert!(out.contains("timed out after 5000ms"), "got {out}");
+        // Per-layer timings distinguish "answered" from "answered slowly".
+        assert!(out.contains("11ms"), "got {out}");
+        assert!(out.contains("WebSocket: ws://"), "got {out}");
+    }
+
+    #[test]
+    fn test_format_status_json_keeps_preexisting_fields() {
+        let out = format_status(
+            &sample_status_session(),
+            true,
+            &wedged_compositor(),
+            OutputFormat::Json,
+        );
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        // `pid`, `headless` and `ws_url` predate the health probe; adding
+        // health must not silently drop what scripts already read.
+        assert_eq!(v["session"], "abc123");
+        assert_eq!(v["pid"], 4242);
+        assert_eq!(v["headless"], true);
+        assert_eq!(v["ws_url"], "ws://127.0.0.1:9222/devtools/browser/x");
+        assert_eq!(v["alive"], true);
+        assert_eq!(v["healthy"], false);
+        assert_eq!(v["health"]["compositor"]["ok"], false);
+        assert_eq!(v["health"]["renderer"]["ok"], true);
+        // A green layer carries no detail, so `jq` sees a clean object.
+        assert!(v["health"]["renderer"].get("detail").is_none());
+    }
+
+    #[test]
+    fn test_format_status_text_healthy_says_alive() {
+        use crate::element::{HealthCheck, SessionHealth};
+        let ok = || HealthCheck {
+            ok: Some(true),
+            ms: 2,
+            detail: None,
+        };
+        let health = SessionHealth {
+            protocol: ok(),
+            renderer: ok(),
+            compositor: ok(),
+        };
+        let out = format_status(&sample_status_session(), true, &health, OutputFormat::Text);
+        assert!(out.contains("Session abc123 is alive"), "got {out}");
+        assert!(!out.contains("UNRESPONSIVE"), "got {out}");
     }
 
     fn sample_target(title: &str, active: Option<bool>, driven: bool) -> BrowserTarget {

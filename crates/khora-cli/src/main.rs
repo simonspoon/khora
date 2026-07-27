@@ -631,10 +631,16 @@ enum Command {
         all: bool,
     },
 
-    /// Check if a session is still alive
+    /// Check if a session is still alive, and whether its browser still responds
     Status {
         /// Session ID (omit to list all sessions)
         session: Option<String>,
+        /// Exit non-zero (4) when the browser is running but unresponsive,
+        /// for `khora status $S --check || relaunch` in scripts. Without it
+        /// the degraded state is reported and the command still exits 0, so
+        /// existing callers are unaffected.
+        #[arg(long)]
+        check: bool,
     },
 
     /// Reap stale (dead-process) sessions; optionally kill live or old sessions
@@ -685,6 +691,34 @@ async fn main() -> ExitCode {
             eprintln!("error: {e}");
             ExitCode::from(e.exit_code() as u8)
         }
+    }
+}
+
+/// Write a command's report to stdout on a path that then returns an error.
+///
+/// `main` only prints the `Ok` arm, but `status --check` has to do both: the
+/// per-layer detail *is* the justification for the exit code. Errors are
+/// ignored — a broken pipe or a full disk cannot change the verdict, and the
+/// process is about to exit non-zero regardless.
+fn emit_report(output: &str) {
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    let _ = writeln!(stdout, "{output}").and_then(|()| stdout.flush());
+}
+
+/// The health of a browser khora could not connect to at all: every layer
+/// failed, for the one reason. Reporting `None` here instead would read as
+/// "not probed", which is the one thing an unreachable browser is not.
+fn unreachable_health(reason: &str) -> khora_core::element::SessionHealth {
+    let check = || khora_core::element::HealthCheck {
+        ok: Some(false),
+        ms: 0,
+        detail: Some(reason.to_string()),
+    };
+    khora_core::element::SessionHealth {
+        protocol: check(),
+        renderer: check(),
+        compositor: check(),
     }
 }
 
@@ -1410,39 +1444,40 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             }
         }
 
-        Command::Status { session } => {
+        Command::Status { session, check } => {
             if let Some(id) = session {
                 match khora_cdp::load_and_verify(id) {
                     Ok(info) => {
-                        let alive = match CdpClient::connect(&info, cli.timeout).await {
-                            Ok(client) => client.is_alive(),
-                            Err(_) => false,
+                        let budget = std::time::Duration::from_millis(cli.timeout);
+                        // A browser that refuses the connection outright is
+                        // dead, and there is nothing left to probe — report
+                        // every layer as unreachable rather than pretending
+                        // the probe ran.
+                        let (alive, health) = match CdpClient::connect(&info, cli.timeout).await {
+                            Ok(client) => (client.is_alive(), client.health(budget).await),
+                            Err(e) => (false, unreachable_health(&e.to_string())),
                         };
 
-                        match cli.format {
-                            OutputFormat::Text => {
-                                let state = if alive { "alive" } else { "dead" };
-                                // The WebSocket URL carries the browser's CDP
-                                // port, which is what anyone dropping to raw
-                                // CDP for something khora has no command for
-                                // needs; without it here the only source is
-                                // the session JSON on disk.
-                                Ok(format!(
-                                    "Session {} is {}\nWebSocket: {}",
-                                    info.id, state, info.ws_url
-                                ))
+                        let output =
+                            khora_core::output::format_status(&info, alive, &health, cli.format);
+                        // Print before failing: the per-layer detail is the
+                        // reason the exit code happened, and swallowing it
+                        // would leave `--check` no more informative than the
+                        // timeouts it replaces.
+                        if *check {
+                            if !alive {
+                                emit_report(&output);
+                                return Err(KhoraError::SessionDead(info.id.clone()));
                             }
-                            OutputFormat::Json => {
-                                Ok(serde_json::to_string_pretty(&serde_json::json!({
-                                    "session": info.id,
-                                    "alive": alive,
-                                    "pid": info.pid,
-                                    "headless": info.headless,
-                                    "ws_url": info.ws_url,
-                                }))
-                                .unwrap())
+                            if let Some(why) = health.failure_summary() {
+                                emit_report(&output);
+                                return Err(KhoraError::SessionUnhealthy(format!(
+                                    "{}: {why}",
+                                    info.id
+                                )));
                             }
                         }
+                        Ok(output)
                     }
                     Err(e) => Err(e),
                 }

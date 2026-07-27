@@ -200,7 +200,7 @@ SESSION1=$(khora --format json launch | jq -r .id)
 SESSION2=$(khora --format json launch | jq -r .id)
 khora navigate "$SESSION1" "https://app1.com"
 khora navigate "$SESSION2" "https://app2.com"
-khora status "$SESSION1"   # check a single session (alive/dead)
+khora status "$SESSION1"   # check a single session (alive/degraded/dead)
 khora status               # lists all sessions
 khora kill --all           # kill every active session at once
 ```
@@ -220,6 +220,68 @@ for — connect to it directly rather than parsing
 `~/.khora/sessions/<id>.json`. Chrome reverts emulation overrides
 (`setTouchEmulationEnabled`, `setDeviceMetricsOverride`) the moment a client
 disconnects, so do the whole sequence on one connection.
+
+### Health: a session can be alive and unusable
+
+`alive` only says the Chrome process is still there. A browser can keep running
+while parts of it stop answering — the incident this was built for had `eval`,
+`click-at` and `wait-for` all working while `wheel` timed out at 5s *and* 15s.
+Without a health check that state is discovered one command timeout at a time,
+and any assert made in between is quietly wrong.
+
+`status <session>` therefore round-trips three probes, ordered by how much of
+the browser each needs:
+
+```
+$ khora status "$SESSION"
+Session a2d6f84a is alive
+  protocol     ok            2ms
+  renderer     ok            0ms
+  compositor   ok            38ms
+WebSocket: ws://127.0.0.1:64796/devtools/browser/1a6adb...
+```
+
+| Layer | Probe | Fails when |
+|---|---|---|
+| `protocol` | `Browser.getVersion` | the browser process is gone or hung |
+| `renderer` | the driven page answers JS | the page's main thread is blocked |
+| `compositor` | a 1x1 `Page.captureScreenshot` | frames have stopped — the state that hangs `wheel` |
+
+A healthy session answers all three in well under 100ms. Each is bounded by
+`--timeout` independently, so only a genuinely wedged browser makes you wait —
+which is the diagnosis you asked for. A layer reported `-` was not applicable
+(a browser with no page open is idle, not sick) and never counts against the
+session.
+
+Add `--check` to turn the verdict into an exit code, for scripts:
+
+```bash
+khora status "$SESSION" --check || SESSION=$(khora -f json launch | jq -r .id)
+```
+
+```
+$ khora status "$SESSION" --check; echo "exit=$?"
+Session a2d6f84a is degraded
+  protocol     ok            0ms
+  renderer     UNRESPONSIVE  2003ms (resolving a page timed out after 2000ms)
+  compositor   UNRESPONSIVE  2003ms (resolving a page timed out after 2000ms)
+WebSocket: ws://127.0.0.1:64796/devtools/browser/1a6adb...
+error: session is degraded: a2d6f84a: renderer unresponsive (...)
+exit=4
+```
+
+Exit 4 is the same code as a dead session, deliberately: both mean *stop
+driving this session and relaunch it*. Without `--check` the degraded state is
+reported and the command still exits 0, so existing callers are unaffected.
+`--format json` adds a flat `healthy` boolean alongside the per-layer `health`
+object, for `jq -e .healthy`.
+
+**Reading a failure.** `renderer` failing means the renderer could not be
+*reached*, not that `evaluate` specifically was tried and refused — resolving a
+page already reaches into the renderer, so a page busy-looping its main thread
+fails both page-scoped layers at once. The `detail` string says which call
+actually timed out. A degrading browser does not recover: kill and relaunch
+rather than debugging the app.
 
 ### Reaping stale sessions
 
@@ -862,4 +924,4 @@ export KHORA_TIMEOUT=10000
 | 1 | General error |
 | 2 | Chrome not found |
 | 3 | Timeout |
-| 4 | Session not found or dead |
+| 4 | Session not found, dead, or (under `status --check`) degraded |
