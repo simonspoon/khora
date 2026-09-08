@@ -16,6 +16,7 @@ FIXTURE="file://${SCRIPT_DIR}/fixture.html"
 KHORA="${ROOT_DIR}/target/debug/khora"
 SESSION=""
 SCREENSHOT="/tmp/khora-qa-screenshot-$$.png"
+SERVER_PIDS=()
 
 # ── helpers ──────────────────────────────────────────────
 
@@ -109,6 +110,11 @@ cleanup() {
   if [[ -n "$SESSION" ]]; then
     "$KHORA" kill "$SESSION" >/dev/null 2>&1 || true
   fi
+  # ${a[@]+...}: bash 3.2 (macOS) treats an empty array as unset under `set -u`,
+  # and the frame section empties this one once it has reaped its own servers.
+  for PID in ${SERVER_PIDS[@]+"${SERVER_PIDS[@]}"}; do
+    kill "$PID" >/dev/null 2>&1 || true
+  done
   rm -f "$SCREENSHOT"
 }
 trap cleanup EXIT
@@ -1170,14 +1176,21 @@ assert_contains "json find has bracket" "$OUTPUT" "["
 # timeout(0ms) never gets to fire and `is_alive()` — a PID check, not a
 # connection check — reports alive. Measured 5 alive / 1 dead over 6 runs of
 # the same binary. What connect()'s timeout bound actually guarantees is that
-# the command *resolves* rather than hangs, so assert that and accept either
+# the command *resolves* rather than hangs, so assert that and accept any
 # verdict.
+#
+# `degraded` is the third one, and it is the usual answer on an idle machine:
+# once connect() resolves, the health probes added in e063a5e run with the
+# same 0ms bound and time out, which is `SessionUnhealthy`. This assertion
+# predates that verdict and matched only alive|dead, so it failed roughly 5
+# runs in 6 (measured: 5 degraded / 1 dead over 6 launches) — passing only
+# when the machine was loaded enough for connect() itself to elapse.
 START=$(date +%s)
 OUTPUT=$("$KHORA" --timeout 0 status "$SESSION" 2>&1)
 EC=$?
 ELAPSED=$(($(date +%s) - START))
 assert_exit "status --timeout 0 exits 0" "$EC" 0
-if echo "$OUTPUT" | grep -qE "is (alive|dead)"; then
+if echo "$OUTPUT" | grep -qE "is (alive|dead|degraded)"; then
   printf "  ${GREEN}PASS${NC}  status --timeout 0 returns a verdict, not a hang\n"
   ((PASS++))
 else
@@ -1293,6 +1306,140 @@ assert_contains "blur errors on an unmatched selector" "$OUTPUT" "element not fo
 OUTPUT=$("$KHORA" blur "$SESSION" --format json 2>&1 || true)
 assert_contains "blur json reports the action" "$OUTPUT" '"action": "blur"'
 
+
+# ── --frame / insert-text ────────────────────────────────
+
+# mesa task 1107: an element inside an iframe is unreachable from the main
+# page. A cross-origin one is worse than merely awkward — it is an
+# out-of-process iframe with its own CDP target, so no amount of main-frame
+# selector cleverness reaches it, and typing `#inner` hits whatever the main
+# page happens to have under that id instead.
+#
+# The fixture needs two real origins, which file:// cannot give: 127.0.0.1
+# serves the outer page and one same-origin iframe, localhost the
+# cross-origin one. Same host, same content, different origin — which is all
+# it takes for Chrome to put the frame in its own process.
+printf "\n${BOLD}▸ --frame and insert-text${NC}\n"
+if ! command -v python3 >/dev/null 2>&1; then
+  printf "  ${RED}SKIP${NC}  --frame tests need python3 to serve the fixture\n"
+else
+  # Ephemeral ports, read back from the server's own banner rather than picked
+  # in advance: fixed ports make two concurrent runs of this suite collide,
+  # and pre-probing for a free one races anything else on the machine.
+  serve_fixture() {
+    local log="$1"
+    # exec: without it $! is the subshell's pid, and killing that leaves the
+    # python server orphaned and holding its port for the rest of the session.
+    (cd "$SCRIPT_DIR/oopif" && exec python3 -u -m http.server 0 --bind 127.0.0.1 >"$log" 2>&1) &
+    SERVER_PIDS+=($!)
+    local waited=0
+    while [[ $waited -lt 50 ]]; do
+      PORT=$(grep -oE 'port [0-9]+' "$log" | head -1 | awk '{print $2}')
+      [[ -n "$PORT" ]] && return 0
+      sleep 0.1
+      ((waited++))
+    done
+    return 1
+  }
+
+  LOG_A="/tmp/khora-qa-oopif-a-$$.log"
+  LOG_B="/tmp/khora-qa-oopif-b-$$.log"
+  if ! serve_fixture "$LOG_A"; then
+    printf "  ${RED}FAIL${NC}  fixture server A never reported a port\n"
+    ((FAIL++))
+  fi
+  PORT_A="$PORT"
+  if ! serve_fixture "$LOG_B"; then
+    printf "  ${RED}FAIL${NC}  fixture server B never reported a port\n"
+    ((FAIL++))
+  fi
+  PORT_B="$PORT"
+  rm -f "$LOG_A" "$LOG_B"
+
+  OUTER="http://127.0.0.1:${PORT_A}/outer.html?inner=http://localhost:${PORT_B}"
+  SAME_FRAME="${PORT_A}/inner.html"
+  CROSS_FRAME="localhost:${PORT_B}"
+  # --no-cache: the fixture is served over HTTP, and a stale copy from an
+  # earlier run is one iframe short of what these assertions read.
+  "$KHORA" navigate "$SESSION" "$OUTER" --no-cache >/dev/null 2>&1
+  sleep 1
+
+  # The frame's inner mirrors — #value and #marker — are only readable
+  # through the frame, so this doubles as the check that `find --frame`
+  # reaches it at all.
+  frame_text() {
+    "$KHORA" find "$SESSION" "$1" --frame "$2" --format json 2>&1 |
+      grep -o '"text": "[^"]*"' | head -1 | cut -d'"' -f4
+  }
+
+  OUTPUT=$("$KHORA" targets "$SESSION" 2>&1)
+  assert_contains "targets lists the cross-origin frame as its own target" \
+    "$OUTPUT" "inner.html"
+
+  # Without --frame, `#inner` resolves against the main page — which has its
+  # own decoy input under that id. The command succeeds and touches nothing
+  # inside either frame, which is exactly the failure --frame exists for.
+  "$KHORA" type "$SESSION" "#inner" "outer-only" >/dev/null 2>&1
+  OUTPUT=$("$KHORA" eval "$SESSION" 'document.querySelector("#inner").value' 2>&1)
+  assert_contains "type without --frame stays on the main page" "$OUTPUT" "outer-only"
+
+  for FRAME in "$SAME_FRAME" "$CROSS_FRAME"; do
+    "$KHORA" type "$SESSION" "#inner" "typed-in-frame" --frame "$FRAME" >/dev/null 2>&1
+    EC=$?
+    assert_exit "type --frame $FRAME exits 0" "$EC" 0
+    assert_eq "type --frame $FRAME reaches the frame's input" \
+      "$(frame_text '#value' "$FRAME")" "typed-in-frame"
+
+    "$KHORA" type-keys "$SESSION" "#inner" "REALKEYS" --frame "$FRAME" --clear >/dev/null 2>&1
+    assert_eq "type-keys --frame $FRAME reaches the frame's input" \
+      "$(frame_text '#value' "$FRAME")" "REALKEYS"
+
+    # insert-text appends at the caret and fires no key events, so the
+    # frame's keydown counter must not move while the value does.
+    KEYS_BEFORE=$(frame_text '#keys' "$FRAME")
+    "$KHORA" insert-text "$SESSION" "#inner" "pasted" --frame "$FRAME" >/dev/null 2>&1
+    EC=$?
+    assert_exit "insert-text --frame $FRAME exits 0" "$EC" 0
+    assert_eq "insert-text --frame $FRAME inserts at the caret" \
+      "$(frame_text '#value' "$FRAME")" "REALKEYSpasted"
+    assert_eq "insert-text fires no key events" \
+      "$(frame_text '#keys' "$FRAME")" "$KEYS_BEFORE"
+
+    "$KHORA" click "$SESSION" "#go" --frame "$FRAME" >/dev/null 2>&1
+    EC=$?
+    assert_exit "click --frame $FRAME exits 0" "$EC" 0
+    assert_eq "click --frame $FRAME activates the frame's button" \
+      "$(frame_text '#marker' "$FRAME")" "clicked"
+
+    OUTPUT=$("$KHORA" click "$SESSION" "#not-in-this-frame" --frame "$FRAME" 2>&1)
+    EC=$?
+    assert_exit "click --frame $FRAME on a missing element exits 1" "$EC" 1
+    assert_contains "a missing element names the frame it was looked for in" \
+      "$OUTPUT" "$FRAME"
+  done
+
+  # insert-text works on the main page too — no --frame required.
+  "$KHORA" type "$SESSION" "#inner" "" >/dev/null 2>&1
+  "$KHORA" insert-text "$SESSION" "#inner" "no-frame" >/dev/null 2>&1
+  OUTPUT=$("$KHORA" eval "$SESSION" 'document.querySelector("#inner").value' 2>&1)
+  assert_contains "insert-text without --frame targets the main page" "$OUTPUT" "no-frame"
+
+  OUTPUT=$("$KHORA" type "$SESSION" "#inner" "x" --frame "no-such-frame" 2>&1)
+  EC=$?
+  assert_exit "--frame with no matching frame exits 1" "$EC" 1
+  assert_contains "--frame with no matching frame says so" "$OUTPUT" "frame not found"
+
+  # Reaped here rather than left to the exit trap: a job still running when
+  # the shell exits is reported as "Terminated: 15" over the summary.
+  for PID in ${SERVER_PIDS[@]+"${SERVER_PIDS[@]}"}; do
+    kill "$PID" >/dev/null 2>&1 || true
+    wait "$PID" 2>/dev/null || true
+  done
+  SERVER_PIDS=()
+
+  # Back to the file:// fixture the sections below expect.
+  "$KHORA" navigate "$SESSION" "$FIXTURE" >/dev/null 2>&1
+fi
 
 # ── kill ─────────────────────────────────────────────────
 

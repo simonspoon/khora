@@ -6,6 +6,12 @@ pub enum KhoraError {
     #[error("element not found: {0}")]
     ElementNotFound(String),
 
+    /// No frame matched the `--frame` substring. Distinct from
+    /// `ElementNotFound` because the selector was never even run: the frame
+    /// the caller named is not in the page.
+    #[error("frame not found: {0}")]
+    FrameNotFound(String),
+
     #[error("session not found: {0}")]
     SessionNotFound(String),
 
@@ -114,6 +120,7 @@ mod tests {
         assert_eq!(KhoraError::Cdp("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::InvalidKeyCombo("x".into()).exit_code(), 1);
         assert_eq!(KhoraError::NotFocused("x".into()).exit_code(), 1);
+        assert_eq!(KhoraError::FrameNotFound("x".into()).exit_code(), 1);
     }
 
     #[test]

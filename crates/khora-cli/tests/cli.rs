@@ -222,6 +222,38 @@ fn test_type_keys_nonexistent_session() {
 }
 
 #[test]
+fn test_insert_text_help() {
+    khora()
+        .args(["insert-text", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Input.insertText"))
+        .stdout(predicate::str::contains("--frame"));
+}
+
+#[test]
+fn test_insert_text_nonexistent_session() {
+    khora()
+        .args(["insert-text", "nonexistent_xyz", "#input", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}
+
+#[test]
+fn test_element_commands_take_a_frame() {
+    // One flag, spelled the same on every element command — a caller that
+    // learns it on `type` must not have to check whether `click` has it.
+    for cmd in ["find", "click", "type", "type-keys", "insert-text"] {
+        khora()
+            .args([cmd, "--help"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--frame"));
+    }
+}
+
+#[test]
 fn test_blur_help() {
     khora()
         .args(["blur", "--help"])

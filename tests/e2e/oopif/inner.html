@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><title>OOPIF inner</title></head>
+<body>
+  <!-- The mirrors below exist so an assertion can read the inner frame's
+       state through `find --frame`, which returns text but not `.value`. -->
+  <input id="inner" value="" oninput="document.getElementById('value').textContent = this.value">
+  <button id="go" onclick="document.getElementById('marker').textContent = 'clicked'">Go</button>
+  <div id="marker">unclicked</div>
+  <div id="value">empty</div>
+  <div id="keys">0</div>
+  <script>
+    let keys = 0;
+    document.addEventListener('keydown', () => {
+      document.getElementById('keys').textContent = String(++keys);
+    });
+  </script>
+</body>
+</html>

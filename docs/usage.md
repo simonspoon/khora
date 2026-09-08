@@ -522,6 +522,70 @@ widgets that own their own buffer (xterm.js), which have no value to select.
 It doesn't handle control characters (Enter, Tab, Backspace, arrows, ...) —
 send those individually with `key`.
 
+### Pasting instead of typing — `insert-text`
+
+`insert-text` focuses the element and commits the whole string in a single CDP
+`Input.insertText`, the way a paste or an IME commit arrives:
+
+```bash
+khora insert-text "$S" "#card-number" "4242424242424242"
+```
+
+It fires **no key events at all** — not `keydown`, not `keypress`, not
+`keyup`, and no per-character `beforeinput`. A field that reads `input`
+events (the common case) sees the text; anything driven by key handling —
+a keystroke-counting masked input, an xterm.js-style widget, a keydown-gated
+autocomplete — does not, and needs `type-keys`. In exchange it is one round
+trip rather than three per character, which is what makes it usable for long
+values and for fields inside a cross-origin iframe.
+
+Like `type-keys` it inserts at the caret, so it appends to an existing value;
+there is no `--clear`, so clear the field with `type-keys --clear` (or an
+empty `type`) first if you need to replace.
+
+### Driving elements inside an iframe
+
+`find`, `click`, `type`, `type-keys` and `insert-text` all take
+`--frame <match>`, which runs the command inside the frame whose URL contains
+`<match>` instead of against the main page:
+
+```bash
+khora find  "$S" "#cardNumber" --frame "plaid.com"
+khora type  "$S" "#cardNumber" "4242424242424242" --frame "plaid.com"
+khora click "$S" "button[type=submit]"            --frame "plaid.com"
+```
+
+`khora targets` lists the frames available to match against — a cross-origin
+iframe shows up there as a target of its own, with its URL:
+
+```
+$ khora targets "$S"
+page    http://localhost:3000/checkout   Checkout
+iframe  https://link.plaid.com/...       Plaid Link
+```
+
+Without `--frame` there is no way to reach these elements. A main-frame
+selector doesn't see into the iframe; focusing the `<iframe>` element itself
+focuses the frame, not the field inside it, so `key` and `type-keys` insert
+nothing; and a trusted `click-at` at coordinates over a cross-origin frame
+does not activate what's under it. `--frame` addresses the frame directly, so
+all of the above work normally once scoped.
+
+The match is a plain substring against the frame's URL, so anything
+distinctive works — the origin (`plaid.com`), the path (`/inner.html`), or a
+query parameter. A match that fits more than one frame takes the first, the
+way `querySelector` takes the first matching element, so narrow it if a page
+embeds several frames from the same origin. A `--frame` that matches no frame is an error
+(`frame not found: ...`, exit 1), distinct from a selector that matches no
+element, so a typo in the match doesn't read as a missing field.
+
+The mechanism differs by origin and that difference is invisible from the CLI,
+but one consequence isn't: a cross-origin frame is a separate browser process,
+and khora opens a second connection to reach it, so a `--frame` command
+against one costs an extra connection setup. Same-origin frames are reached
+through the page and cost nothing extra. Nested frames are searched
+recursively.
+
 ### Blur
 
 `blur` fires `blur`/`focusout` on the focused element, which is what a

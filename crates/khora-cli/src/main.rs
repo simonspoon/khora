@@ -288,6 +288,10 @@ enum Command {
         session: String,
         /// CSS selector
         selector: String,
+        /// Run against the frame whose URL contains this substring, instead
+        /// of the main page (for elements inside an iframe)
+        #[arg(long)]
+        frame: Option<String>,
     },
 
     /// Click an element by CSS selector
@@ -296,6 +300,10 @@ enum Command {
         session: String,
         /// CSS selector
         selector: String,
+        /// Run against the frame whose URL contains this substring, instead
+        /// of the main page (for elements inside an iframe)
+        #[arg(long)]
+        frame: Option<String>,
     },
 
     /// Type text into an element
@@ -306,6 +314,10 @@ enum Command {
         selector: String,
         /// Text to type
         text: String,
+        /// Run against the frame whose URL contains this substring, instead
+        /// of the main page (for elements inside an iframe)
+        #[arg(long)]
+        frame: Option<String>,
     },
 
     /// Type text with trusted per-character key events (CDP Input.dispatchKeyEvent)
@@ -328,6 +340,30 @@ enum Command {
         /// existing value is appended to otherwise)
         #[arg(long)]
         clear: bool,
+        /// Run against the frame whose URL contains this substring, instead
+        /// of the main page (for elements inside an iframe)
+        #[arg(long)]
+        frame: Option<String>,
+    },
+
+    /// Insert text in one CDP Input.insertText call (paste/IME-style)
+    ///
+    /// Focuses the element, then commits the whole string at once. Fires no
+    /// key events at all — not even `keydown` — so anything gated on key
+    /// handling won't see it; use `type-keys` there. One round trip instead
+    /// of three per character, which is what makes it practical for long
+    /// values and for fields inside a cross-origin iframe.
+    InsertText {
+        /// Session ID
+        session: String,
+        /// CSS selector for the element to focus
+        selector: String,
+        /// Text to insert
+        text: String,
+        /// Run against the frame whose URL contains this substring, instead
+        /// of the main page (for elements inside an iframe)
+        #[arg(long)]
+        frame: Option<String>,
     },
 
     /// Blur the focused element, firing blur/focusout
@@ -752,6 +788,15 @@ fn parse_dpr(s: &str) -> Result<f64, String> {
     Ok(dpr)
 }
 
+/// Text-mode suffix naming the frame a command ran in, empty when it ran
+/// against the main page.
+fn in_frame(frame: &Option<String>) -> String {
+    match frame {
+        Some(f) => format!(" (frame {f})"),
+        None => String::new(),
+    }
+}
+
 async fn run(cli: &Cli) -> Result<String, KhoraError> {
     // Auto-reap dead sessions on every invocation — best effort.
     // Skip for `reap` itself: it handles cleanup and must report what it reaped.
@@ -939,23 +984,37 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             ))
         }
 
-        Command::Find { session, selector } => {
+        Command::Find {
+            session,
+            selector,
+            frame,
+        } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            let elements = client.find_elements(selector).await?;
+            let elements = client
+                .find_elements(selector, frame.as_deref(), cli.timeout)
+                .await?;
             Ok(khora_core::output::format_elements(&elements, cli.format))
         }
 
-        Command::Click { session, selector } => {
+        Command::Click {
+            session,
+            selector,
+            frame,
+        } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            client.click(selector).await?;
+            client
+                .click(selector, frame.as_deref(), cli.timeout)
+                .await?;
 
             match cli.format {
-                OutputFormat::Text => Ok(format!("Clicked: {selector}")),
-                OutputFormat::Json => Ok(serde_json::to_string_pretty(
-                    &serde_json::json!({ "action": "click", "selector": selector }),
-                )
+                OutputFormat::Text => Ok(format!("Clicked: {selector}{}", in_frame(frame))),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "click",
+                    "selector": selector,
+                    "frame": frame,
+                }))
                 .unwrap()),
             }
         }
@@ -964,17 +1023,24 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             session,
             selector,
             text,
+            frame,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
-            client.type_text(selector, text).await?;
+            client
+                .type_text(selector, text, frame.as_deref(), cli.timeout)
+                .await?;
 
             match cli.format {
-                OutputFormat::Text => Ok(format!("Typed \"{text}\" into {selector}")),
+                OutputFormat::Text => Ok(format!(
+                    "Typed \"{text}\" into {selector}{}",
+                    in_frame(frame)
+                )),
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "type",
                     "selector": selector,
                     "text": text,
+                    "frame": frame,
                 }))
                 .unwrap()),
             }
@@ -985,11 +1051,12 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             selector,
             text,
             clear,
+            frame,
         } => {
             let session_info = khora_cdp::load_and_verify(session)?;
             let client = CdpClient::connect(&session_info, cli.timeout).await?;
             client
-                .type_keys(selector, text, *clear, cli.timeout)
+                .type_keys(selector, text, *clear, frame.as_deref(), cli.timeout)
                 .await?;
 
             match cli.format {
@@ -999,13 +1066,44 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     } else {
                         "real keys"
                     };
-                    Ok(format!("Typed \"{text}\" into {selector} ({how})"))
+                    Ok(format!(
+                        "Typed \"{text}\" into {selector}{} ({how})",
+                        in_frame(frame)
+                    ))
                 }
                 OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
                     "action": "type-keys",
                     "selector": selector,
                     "text": text,
                     "clear": clear,
+                    "frame": frame,
+                }))
+                .unwrap()),
+            }
+        }
+
+        Command::InsertText {
+            session,
+            selector,
+            text,
+            frame,
+        } => {
+            let session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            client
+                .insert_text(selector, text, frame.as_deref(), cli.timeout)
+                .await?;
+
+            match cli.format {
+                OutputFormat::Text => Ok(format!(
+                    "Inserted \"{text}\" into {selector}{}",
+                    in_frame(frame)
+                )),
+                OutputFormat::Json => Ok(serde_json::to_string_pretty(&serde_json::json!({
+                    "action": "insert-text",
+                    "selector": selector,
+                    "text": text,
+                    "frame": frame,
                 }))
                 .unwrap()),
             }

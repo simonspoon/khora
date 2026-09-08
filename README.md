@@ -103,7 +103,9 @@ khora launch --window-size 1366x768
 | `click <session> <selector>` | Click an element |
 | `type <session> <selector> <text>` | Type text into an element |
 | `type-keys <session> <selector> <text>` | Type text with trusted per-character key events — for xterm.js-style widgets `type` can't reach, and for anything gated on focus/blur (`type` fires no focus events, so commit-on-blur never runs). Inserts at the caret; `--clear` wipes the field first |
+| `insert-text <session> <selector> <text>` | Focus an element and insert the whole string in one `Input.insertText` (paste/IME-style). Fires no key events at all — one round trip instead of three per character, which is what makes it practical for long values and for fields inside a cross-origin iframe |
 | `blur <session> [selector]` | Blur the focused element (default `document.activeElement`), firing blur/focusout so commit-on-blur runs — without `key Tab`'s side effect of focusing the next element. Errors if the target isn't focused |
+| *(`--frame <match>` on `find`, `click`, `type`, `type-keys`, `insert-text`)* | Run the command inside the frame whose URL contains `<match>`, instead of the main page — the only way to reach an element in an iframe, cross-origin ones included |
 | `drag <session> <from> <to>` | Drag with trusted mouse events between `X,Y` points (`--steps`, `--delay` ms) |
 | `mouse-down <session> <at>` | Press the left mouse button at `X,Y` without releasing it |
 | `mouse-move <session> <at>` | Move the mouse to `X,Y`, carrying over button state |

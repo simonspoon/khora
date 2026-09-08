@@ -6,7 +6,7 @@ use chromiumoxide::cdp::browser_protocol::emulation::{
 };
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchKeyEventParams, DispatchKeyEventType, DispatchMouseEventParams, DispatchMouseEventType,
-    DispatchTouchEventReturns, DispatchTouchEventType, MouseButton, TouchPoint,
+    DispatchTouchEventReturns, DispatchTouchEventType, InsertTextParams, MouseButton, TouchPoint,
 };
 use chromiumoxide::cdp::browser_protocol::network::{
     EnableParams as NetworkEnableParams, SetCacheDisabledParams,
@@ -16,6 +16,7 @@ use chromiumoxide::cdp::browser_protocol::page::{
     EnableParams as PageEnableParams, Viewport,
 };
 use chromiumoxide::cdp::browser_protocol::target::GetTargetsParams;
+use chromiumoxide::cdp::js_protocol::runtime::EvaluateParams;
 use chromiumoxide::page::ScreenshotParams;
 use chromiumoxide::Page;
 use futures::StreamExt;
@@ -71,10 +72,191 @@ impl chromiumoxide::Command for DispatchTouchEvent {
     type Response = DispatchTouchEventReturns;
 }
 
+/// Where an element command runs its JS and dispatches its input.
+///
+/// A frame reached with `--frame` is one of two things, and they need
+/// different CDP handling.
+///
+/// A cross-origin frame is an out-of-process iframe (OOPIF) — its own CDP
+/// target, which chromiumoxide will not drive: its target type is `iframe`,
+/// `Target::is_page()` is false, and `Handler` skips polling non-page targets
+/// entirely, so a `Page` obtained via `Browser::get_page()` for one queues
+/// commands that are never sent and every call on it hangs forever. Chrome
+/// lists the OOPIF in `/json/list` with its own `webSocketDebuggerUrl`
+/// though, so khora opens a second connection straight to that target and
+/// talks to it with no session routing at all.
+///
+/// A same-origin frame is not a target at all — it shares the page's. CDP
+/// would reach it by evaluating in its execution context, but chromiumoxide
+/// only learns child frames from live `Page.frameAttached` events, and khora
+/// reconnects to an already-loaded page, so its frame list holds nothing but
+/// the main frame and `frame_execution_context()` has nothing to return.
+/// Reaching it through the page's own JS instead costs nothing: the frame is
+/// same-origin, so `contentDocument` is readable, and the element JS runs
+/// unchanged against a rebound `document`/`window`.
+struct FrameContext {
+    /// The page target, always. Input dispatched at the browser level and
+    /// the post-input compositor nudge go here even for an OOPIF.
+    page: Page,
+    /// The frame match, when the frame is a same-origin one reached through
+    /// the page's JS.
+    same_origin: Option<String>,
+    /// A direct connection to an OOPIF target, when the frame is one.
+    frame: Option<FrameConnection>,
+    /// The frame match this was resolved from, for error messages.
+    label: Option<String>,
+}
+
+/// A dedicated connection to an OOPIF's own DevTools endpoint, plus the task
+/// pumping its event handler — which must outlive the commands sent on it.
+struct FrameConnection {
+    browser: Browser,
+    _handler_handle: tokio::task::JoinHandle<()>,
+}
+
+impl FrameContext {
+    /// Open a dedicated connection to an OOPIF's own DevTools endpoint.
+    ///
+    /// Bounded for the same reason `CdpClient::connect` is: a wedged Chrome
+    /// leaves the socket open but unresponsive, and an unbounded handshake
+    /// here would hang a command that was given an explicit `--timeout`.
+    async fn connect(ws_url: &str, timeout_ms: u64) -> KhoraResult<FrameConnection> {
+        let (browser, mut handler) = tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            Browser::connect(ws_url),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))?
+        .map_err(|e| KhoraError::Cdp(format!("{ws_url}: {e}")))?;
+        let handler_handle = tokio::spawn(async move {
+            while let Some(event) = handler.next().await {
+                if event.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(FrameConnection {
+            browser,
+            _handler_handle: handler_handle,
+        })
+    }
+
+    /// A JS expression for the same-origin frame window whose URL contains
+    /// `needle`, or `null`. Cross-origin children are skipped — reading their
+    /// location throws, and they are reached as OOPIF targets instead.
+    fn frame_window_js(needle: &str) -> String {
+        format!(
+            r#"
+            (() => {{
+                const needle = {needle};
+                const search = (w) => {{
+                    for (const child of Array.from(w.frames)) {{
+                        let href;
+                        try {{ href = child.location.href; }} catch (e) {{ continue; }}
+                        if (href.includes(needle)) return child;
+                        const found = search(child);
+                        if (found) return found;
+                    }}
+                    return null;
+                }};
+                return search(window);
+            }})()
+            "#,
+            needle = serde_json::to_string(needle).unwrap_or_default()
+        )
+    }
+
+    /// Evaluate `js` in this frame and decode the result, the way every
+    /// element op here expects it.
+    async fn evaluate(&self, js: String) -> KhoraResult<serde_json::Value> {
+        // A same-origin frame runs the caller's JS unchanged, with `document`
+        // and `window` bound to the frame's — the element ops reach for both.
+        let js = match &self.same_origin {
+            Some(needle) => format!(
+                r#"
+                (() => {{
+                    const frame = {finder};
+                    if (!frame) return {{ found: false, error: "frame is gone" }};
+                    // Rebound as parameters, not `const`s: the finder above
+                    // reads the page's own `window`, which a `const window`
+                    // in the same scope would put in the temporal dead zone.
+                    return ((window, document) => {js})(frame, frame.document);
+                }})()
+                "#,
+                finder = Self::frame_window_js(needle)
+            ),
+            None => js,
+        };
+
+        let params = EvaluateParams::builder()
+            .expression(js)
+            .return_by_value(true)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+
+        let value = match &self.frame {
+            Some(frame) => frame
+                .browser
+                .execute(params)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?
+                .result
+                .result
+                .value
+                .clone(),
+            // `evaluate_expression`, not `evaluate`: the latter first awaits
+            // the page's own execution context, a round trip we don't need.
+            None => self
+                .page
+                .evaluate_expression(params)
+                .await
+                .map_err(|e| KhoraError::Cdp(e.to_string()))?
+                .object()
+                .value
+                .clone(),
+        };
+
+        Ok(value.unwrap_or(serde_json::Value::Null))
+    }
+
+    /// Send a CDP command to this frame, discarding the response.
+    ///
+    /// Input goes to the OOPIF's own target when there is one, and to the
+    /// page otherwise — including for a same-origin frame, whose focused
+    /// element the page's input pipeline already routes to.
+    async fn execute<T: chromiumoxide::Command>(&self, cmd: T) -> KhoraResult<()> {
+        match &self.frame {
+            Some(frame) => frame
+                .browser
+                .execute(cmd)
+                .await
+                .map(|_| ())
+                .map_err(|e| KhoraError::Cdp(e.to_string())),
+            None => self
+                .page
+                .execute(cmd)
+                .await
+                .map(|_| ())
+                .map_err(|e| KhoraError::Cdp(e.to_string())),
+        }
+    }
+
+    /// A selector description for errors, naming the frame when there is one.
+    fn describe(&self, selector: &str) -> String {
+        match &self.label {
+            Some(frame) => format!("{selector} (in frame {frame})"),
+            None => selector.to_string(),
+        }
+    }
+}
+
 /// High-level CDP client wrapping chromiumoxide Browser.
 pub struct CdpClient {
     browser: Browser,
     _handler_handle: tokio::task::JoinHandle<()>,
+    /// The browser-level DevTools websocket URL this client is connected on.
+    /// Kept so `frame_context()` can derive a per-target endpoint from it.
+    ws_url: String,
     /// Chrome user data directory owned by this session. Carried by `connect()`
     /// as well as `launch()` so that `close()` can remove it on every path —
     /// `kill`/`reap` always reach Chrome via `connect()`, and leaving this
@@ -182,6 +364,7 @@ impl CdpClient {
         let client = Self {
             browser,
             _handler_handle: handler_handle,
+            ws_url: session.ws_url.clone(),
             data_dir: Some(data_dir),
             pid,
             media: None,
@@ -227,6 +410,7 @@ impl CdpClient {
         Ok(Self {
             browser,
             _handler_handle: handler_handle,
+            ws_url: session.ws_url.clone(),
             data_dir: session.data_dir.clone(),
             pid: session.pid,
             media: session.media.clone().filter(|m| !m.is_empty()),
@@ -298,8 +482,13 @@ impl CdpClient {
     }
 
     /// Find elements matching a CSS selector.
-    pub async fn find_elements(&self, selector: &str) -> KhoraResult<Vec<ElementInfo>> {
-        let page = self.get_or_create_page().await?;
+    pub async fn find_elements(
+        &self,
+        selector: &str,
+        frame: Option<&str>,
+        timeout_ms: u64,
+    ) -> KhoraResult<Vec<ElementInfo>> {
+        let ctx = self.frame_context(frame, timeout_ms).await?;
 
         // Use JavaScript to gather element info since chromiumoxide's Element
         // doesn't expose all the fields we need directly
@@ -334,14 +523,7 @@ impl CdpClient {
             selector = serde_json::to_string(selector).unwrap_or_default()
         );
 
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
-
-        let value = result
-            .into_value::<serde_json::Value>()
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let value = ctx.evaluate(js).await?;
 
         let elements: Vec<serde_json::Value> = match value {
             serde_json::Value::Array(arr) => arr,
@@ -351,13 +533,13 @@ impl CdpClient {
                         "invalid selector {selector:?}: {err}"
                     )));
                 }
-                return Err(KhoraError::ElementNotFound(selector.to_string()));
+                return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
             }
-            _ => return Err(KhoraError::ElementNotFound(selector.to_string())),
+            _ => return Err(KhoraError::ElementNotFound(ctx.describe(selector))),
         };
 
         if elements.is_empty() {
-            return Err(KhoraError::ElementNotFound(selector.to_string()));
+            return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
         }
 
         let mut result = Vec::with_capacity(elements.len());
@@ -388,8 +570,13 @@ impl CdpClient {
     /// Click an element matching a CSS selector.
     /// Uses JS-based click to avoid chromiumoxide element methods hanging
     /// on reconnected sessions.
-    pub async fn click(&self, selector: &str) -> KhoraResult<()> {
-        let page = self.get_or_create_page().await?;
+    pub async fn click(
+        &self,
+        selector: &str,
+        frame: Option<&str>,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let ctx = self.frame_context(frame, timeout_ms).await?;
         let js = format!(
             r#"
             (() => {{
@@ -407,14 +594,7 @@ impl CdpClient {
             selector = serde_json::to_string(selector).unwrap_or_default()
         );
 
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
-
-        let value = result
-            .into_value::<serde_json::Value>()
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let value = ctx.evaluate(js).await?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
             if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
@@ -422,7 +602,7 @@ impl CdpClient {
                     "invalid selector {selector:?}: {err}"
                 )));
             }
-            return Err(KhoraError::ElementNotFound(selector.to_string()));
+            return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
         }
         Ok(())
     }
@@ -451,8 +631,14 @@ impl CdpClient {
     /// `type_keys`) focuses the document, after which this method does fire
     /// focus/blur, while a `navigate` resets it. Use [`Self::type_keys`] when
     /// focus/blur behavior matters.
-    pub async fn type_text(&self, selector: &str, text: &str) -> KhoraResult<()> {
-        let page = self.get_or_create_page().await?;
+    pub async fn type_text(
+        &self,
+        selector: &str,
+        text: &str,
+        frame: Option<&str>,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let ctx = self.frame_context(frame, timeout_ms).await?;
         let js = format!(
             r#"
             (() => {{
@@ -482,14 +668,7 @@ impl CdpClient {
             text = serde_json::to_string(text).unwrap_or_default()
         );
 
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
-
-        let value = result
-            .into_value::<serde_json::Value>()
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let value = ctx.evaluate(js).await?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
             if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
@@ -497,7 +676,7 @@ impl CdpClient {
                     "invalid selector {selector:?}: {err}"
                 )));
             }
-            return Err(KhoraError::ElementNotFound(selector.to_string()));
+            return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
         }
         Ok(())
     }
@@ -537,9 +716,10 @@ impl CdpClient {
         selector: &str,
         text: &str,
         clear: bool,
+        frame: Option<&str>,
         timeout_ms: u64,
     ) -> KhoraResult<()> {
-        let page = self.get_or_create_page().await?;
+        let ctx = self.frame_context(frame, timeout_ms).await?;
         let js = format!(
             r#"
             (() => {{
@@ -568,14 +748,7 @@ impl CdpClient {
             selector = serde_json::to_string(selector).unwrap_or_default()
         );
 
-        let result = page
-            .evaluate(js)
-            .await
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
-
-        let value = result
-            .into_value::<serde_json::Value>()
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let value = ctx.evaluate(js).await?;
 
         if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
             if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
@@ -583,7 +756,7 @@ impl CdpClient {
                     "invalid selector {selector:?}: {err}"
                 )));
             }
-            return Err(KhoraError::ElementNotFound(selector.to_string()));
+            return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
         }
 
         if clear {
@@ -600,11 +773,10 @@ impl CdpClient {
                 .map_err(KhoraError::Cdp)?;
             tokio::time::timeout(
                 std::time::Duration::from_millis(timeout_ms),
-                page.execute(down),
+                ctx.execute(down),
             )
             .await
-            .map_err(|_| KhoraError::Timeout(timeout_ms))?
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            .map_err(|_| KhoraError::Timeout(timeout_ms))??;
 
             let up = builder
                 .r#type(DispatchKeyEventType::KeyUp)
@@ -612,11 +784,10 @@ impl CdpClient {
                 .map_err(KhoraError::Cdp)?;
             tokio::time::timeout(
                 std::time::Duration::from_millis(timeout_ms),
-                page.execute(up),
+                ctx.execute(up),
             )
             .await
-            .map_err(|_| KhoraError::Timeout(timeout_ms))?
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            .map_err(|_| KhoraError::Timeout(timeout_ms))??;
         }
 
         for c in text.chars() {
@@ -634,11 +805,10 @@ impl CdpClient {
                 .map_err(KhoraError::Cdp)?;
             tokio::time::timeout(
                 std::time::Duration::from_millis(timeout_ms),
-                page.execute(down),
+                ctx.execute(down),
             )
             .await
-            .map_err(|_| KhoraError::Timeout(timeout_ms))?
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            .map_err(|_| KhoraError::Timeout(timeout_ms))??;
 
             let char_event = builder
                 .clone()
@@ -649,11 +819,10 @@ impl CdpClient {
                 .map_err(KhoraError::Cdp)?;
             tokio::time::timeout(
                 std::time::Duration::from_millis(timeout_ms),
-                page.execute(char_event),
+                ctx.execute(char_event),
             )
             .await
-            .map_err(|_| KhoraError::Timeout(timeout_ms))?
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            .map_err(|_| KhoraError::Timeout(timeout_ms))??;
 
             let up = builder
                 .r#type(DispatchKeyEventType::KeyUp)
@@ -661,14 +830,77 @@ impl CdpClient {
                 .map_err(KhoraError::Cdp)?;
             tokio::time::timeout(
                 std::time::Duration::from_millis(timeout_ms),
-                page.execute(up),
+                ctx.execute(up),
             )
             .await
-            .map_err(|_| KhoraError::Timeout(timeout_ms))?
-            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            .map_err(|_| KhoraError::Timeout(timeout_ms))??;
         }
 
-        self.force_compositor_frame(&page).await;
+        self.force_compositor_frame(&ctx.page).await;
+        Ok(())
+    }
+
+    /// Insert text into an element matching a CSS selector in one CDP
+    /// `Input.insertText` call, the way a paste or an IME commit arrives.
+    ///
+    /// Unlike [`Self::type_keys`] this fires **no key events at all** — no
+    /// keydown, keypress or keyup, and no per-character `beforeinput`. A
+    /// field that only reads `input` events (the common case) sees the text;
+    /// anything driven by key handling — a keystroke-counting masked input,
+    /// an xterm.js-style widget, a keydown-gated autocomplete — does not.
+    /// Use `type-keys` there. In exchange it is one round trip rather than
+    /// three per character, which is what makes it usable for long values and
+    /// for fields inside a cross-origin iframe.
+    ///
+    /// Text is inserted at the caret, so it appends to an existing value.
+    pub async fn insert_text(
+        &self,
+        selector: &str,
+        text: &str,
+        frame: Option<&str>,
+        timeout_ms: u64,
+    ) -> KhoraResult<()> {
+        let ctx = self.frame_context(frame, timeout_ms).await?;
+        let js = format!(
+            r#"
+            (() => {{
+                let el;
+                try {{
+                    el = document.querySelector({selector});
+                }} catch (e) {{
+                    return {{ found: false, error: e.message }};
+                }}
+                if (!el) return {{ found: false }};
+                el.focus();
+                return {{ found: true }};
+            }})()
+            "#,
+            selector = serde_json::to_string(selector).unwrap_or_default()
+        );
+
+        let value = ctx.evaluate(js).await?;
+
+        if value.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+                return Err(KhoraError::JavaScriptError(format!(
+                    "invalid selector {selector:?}: {err}"
+                )));
+            }
+            return Err(KhoraError::ElementNotFound(ctx.describe(selector)));
+        }
+
+        let insert = InsertTextParams::builder()
+            .text(text)
+            .build()
+            .map_err(KhoraError::Cdp)?;
+        tokio::time::timeout(
+            std::time::Duration::from_millis(timeout_ms),
+            ctx.execute(insert),
+        )
+        .await
+        .map_err(|_| KhoraError::Timeout(timeout_ms))??;
+
+        self.force_compositor_frame(&ctx.page).await;
         Ok(())
     }
 
@@ -2355,6 +2587,82 @@ impl CdpClient {
             apply_keyboard(&page, Some(*keyboard)).await?;
         }
         Ok(page)
+    }
+
+    /// Resolve where an element command should run.
+    ///
+    /// `frame` is a substring matched against frame and target URLs. OOPIF
+    /// targets are checked first, since a cross-origin frame is the case the
+    /// page's own JS cannot reach.
+    async fn frame_context(
+        &self,
+        frame: Option<&str>,
+        timeout_ms: u64,
+    ) -> KhoraResult<FrameContext> {
+        let page = self.get_or_create_page().await?;
+        let Some(needle) = frame else {
+            return Ok(FrameContext {
+                page,
+                same_origin: None,
+                frame: None,
+                label: None,
+            });
+        };
+
+        // Cross-origin: the frame is its own CDP target, of type "iframe".
+        let targets = self
+            .browser
+            .execute(GetTargetsParams::default())
+            .await
+            .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+        let oopif = targets
+            .result
+            .target_infos
+            .iter()
+            .find(|t| t.r#type == "iframe" && t.url.contains(needle));
+        if let Some(target) = oopif {
+            let frame_ws = Self::target_ws_url(&self.ws_url, target.target_id.inner());
+            tracing::debug!(url = %target.url, ws = %frame_ws, "frame is an OOPIF target");
+            let connection = FrameContext::connect(&frame_ws, timeout_ms).await?;
+            return Ok(FrameContext {
+                page,
+                same_origin: None,
+                frame: Some(connection),
+                label: Some(needle.to_string()),
+            });
+        }
+
+        // Same origin: a frame in this page, reachable from the page's JS.
+        let ctx = FrameContext {
+            page,
+            same_origin: None,
+            frame: None,
+            label: None,
+        };
+        let probe = format!("{} !== null", FrameContext::frame_window_js(needle));
+        if ctx.evaluate(probe).await? == serde_json::Value::Bool(true) {
+            tracing::debug!(frame = needle, "frame is same-origin");
+            return Ok(FrameContext {
+                same_origin: Some(needle.to_string()),
+                label: Some(needle.to_string()),
+                ..ctx
+            });
+        }
+
+        Err(KhoraError::FrameNotFound(needle.to_string()))
+    }
+
+    /// The per-target DevTools endpoint for `target_id`, derived from the
+    /// browser-level one. This is the same URL `/json/list` advertises as a
+    /// target's `webSocketDebuggerUrl` — built here rather than fetched so
+    /// frame resolution needs no HTTP round trip, and no knowledge of which
+    /// interface Chrome's HTTP endpoint is bound to.
+    fn target_ws_url(browser_ws_url: &str, target_id: &str) -> String {
+        let base = browser_ws_url
+            .split_once("/devtools/")
+            .map(|(base, _)| base)
+            .unwrap_or(browser_ws_url);
+        format!("{base}/devtools/page/{target_id}")
     }
 
     /// Pick the page `get_or_create_page()` should operate on, creating one if

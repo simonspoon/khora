@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html>
+<head><title>OOPIF outer</title></head>
+<body>
+  <h1>Outer page</h1>
+  <!-- Same id as the inner frame's input, so a command that misses the frame
+       and hits the main page is visible rather than silently absent. -->
+  <input id="inner" value="outer-decoy">
+  <!-- Cross-origin: its own out-of-process CDP target. -->
+  <iframe id="cross" src="" width="400" height="200"></iframe>
+  <!-- Same-origin: shares this page's target, reached by execution context. -->
+  <iframe id="same" src="inner.html" width="400" height="200"></iframe>
+  <script>
+    // The cross-origin URL is passed in the query string so the fixture works
+    // on whatever ports the serving script picked.
+    const inner = new URLSearchParams(location.search).get('inner');
+    document.getElementById('cross').src = inner + '/inner.html';
+  </script>
+</body>
+</html>
