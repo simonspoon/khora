@@ -96,6 +96,8 @@ khora launch --window-size 1366x768
 | Command | Description |
 |---------|-------------|
 | `launch` | Start Chrome (headless by default, `--visible` for headed, `--window-size WxH`) |
+| `attach [endpoint]` | Join a Chrome you already started with `--remote-debugging-port`, instead of launching one. `endpoint` is a port, `host:port` or `ws://` URL (or `--port <n>`, default 9222); `--target <id>` picks the tab. `kill` only disconnects — the browser is never closed. Chrome only accepts an IP or `localhost` as the endpoint host (hostnames get a 500); use an IP or an SSH tunnel. See [Attaching to your own Chrome](docs/usage.md#attaching-to-your-own-chrome) |
+| `use-target <session> <target-id>` | Pin a session to a different tab (IDs from `targets`) |
 | `navigate <session> <url>` | Go to a URL (`--no-cache` to bypass the browser cache) |
 | `set-viewport <session> <WxH> [dpr]` | Override the viewport — phone widths headless Chrome won't allow via `--window-size` (`--mobile` for mobile emulation, `--reset` to clear). Persists on the session and is re-applied before every later command, so it survives `navigate` |
 | `emulate-media <session>` | Emulate CSS media features — `--color-scheme`, `--reduced-motion`, `--forced-colors`, `--media` (`screen`/`print`), `--reset`. Sticks to the session and fires real `matchMedia` change events |
@@ -125,10 +127,10 @@ khora launch --window-size 1366x768
 | `attribute <session> <selector> <attr>` | Get attribute value |
 | `wait-for <session> <selector>` | Wait for element to appear |
 | `wait-gone <session> <selector>` | Wait for element to disappear |
-| `targets <session>` (alias `pages`) | List the browser's open targets — type, url, title, which tab is `active`, and which one khora drives |
+| `targets <session>` (alias `pages`) | List the browser's open targets — type, url, title, target id (for `use-target`), which tab is `active`, and which one khora drives |
 | `console <session>` | Read console messages |
 | `eval <session> <js>` | Execute JavaScript, return result |
-| `kill <session>` | Close browser and clean up (`--all` to kill every session) |
+| `kill <session>` | Close browser and clean up (`--all` to kill every session). On an attached session it only disconnects and forgets the session |
 | `status [session] [--check]` | Check session status, probe whether the browser still responds, and report its CDP WebSocket URL (or list all) |
 | `network <session>` | List captured network requests (`fetch` and `XMLHttpRequest`) |
 | `reap` | Remove sessions whose Chrome died (`--all` to also kill live sessions, `--older-than <dur>` for age-based cleanup, e.g. `30m`, `2h`, `24h`, `--purge-data-dirs` to also delete orphaned Chrome profiles) |
@@ -142,6 +144,8 @@ Default timeout is 5000ms, override with `--timeout` or `KHORA_TIMEOUT`.
 ## Session management
 
 Sessions persist across CLI invocations. `launch` starts Chrome and saves a session file to `~/.khora/sessions/`. Subsequent commands reconnect using the session ID. `kill` closes the browser and removes the session file.
+
+An `attach`ed session (a Chrome you started yourself) has no khora-owned process: its liveness is whether the browser's debugging endpoint still answers, and `kill`/`reap` only delete the session file — they never close or signal the browser, and there is no data directory to clean up.
 
 Multiple concurrent sessions are supported — each gets a unique ID and a private Chrome user data directory. That directory is deleted when the session ends, on every path: `kill`, `reap`, and auto-reap alike.
 

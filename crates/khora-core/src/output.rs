@@ -14,10 +14,17 @@ pub enum OutputFormat {
 pub fn format_session(session: &SessionInfo, format: OutputFormat) -> String {
     match format {
         OutputFormat::Text => {
-            format!(
+            let mut out = format!(
                 "Session: {}\nPID: {}\nHeadless: {}\nWebSocket: {}",
                 session.id, session.pid, session.headless, session.ws_url
-            )
+            );
+            if session.attached {
+                out.push_str("\nAttached: true");
+            }
+            if let Some(target) = &session.target_id {
+                out.push_str(&format!("\nTarget: {target}"));
+            }
+            out
         }
         OutputFormat::Json => serde_json::to_string_pretty(session).unwrap_or_default(),
     }
@@ -163,9 +170,15 @@ pub fn format_sessions(sessions: &[SessionInfo], format: OutputFormat) -> String
                 "SESSION", "PID", "HEADLESS", "WEBSOCKET"
             ));
             for s in sessions {
+                // An attached session has no PID of ours to show.
+                let pid = if s.attached {
+                    "-".to_string()
+                } else {
+                    s.pid.to_string()
+                };
                 lines.push(format!(
                     "{:<12} {:<8} {:<10} {}",
-                    s.id, s.pid, s.headless, s.ws_url
+                    s.id, pid, s.headless, s.ws_url
                 ));
             }
             lines.join("\n")
@@ -274,7 +287,7 @@ pub fn format_targets(targets: &[BrowserTarget], format: OutputFormat) -> String
             let mut lines = Vec::with_capacity(targets.len() + 1);
             lines.push(format!(
                 "{:<16} {:<14} {:<30} {}",
-                "TYPE", "STATE", "TITLE", "URL"
+                "TYPE", "STATE", "TITLE", "URL [ID]"
             ));
             for t in targets {
                 // Two independent bits in one column: `active` is Chrome's
@@ -295,8 +308,8 @@ pub fn format_targets(targets: &[BrowserTarget], format: OutputFormat) -> String
                 };
                 let title = truncate(&t.title, 30);
                 lines.push(format!(
-                    "{:<16} {:<14} {:<30} {}",
-                    t.target_type, state, title, t.url
+                    "{:<16} {:<14} {:<30} {}  [{}]",
+                    t.target_type, state, title, t.url, t.target_id
                 ));
             }
             lines.join("\n")
@@ -330,6 +343,9 @@ pub fn format_status(
                 "degraded"
             };
             let mut lines = vec![format!("Session {session} is {state}")];
+            if info.attached {
+                lines.push("  attached to a browser khora does not own".to_string());
+            }
             for (name, check) in health.layers() {
                 let verdict = match check.ok {
                     Some(true) => "ok",
@@ -362,6 +378,7 @@ pub fn format_status(
             "health": health,
             "pid": info.pid,
             "headless": info.headless,
+            "attached": info.attached,
             "ws_url": ws_url,
         }))
         .unwrap_or_default(),
@@ -441,6 +458,8 @@ mod tests {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         }
     }
 
@@ -692,6 +711,8 @@ mod tests {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         }
     }
 
@@ -801,6 +822,12 @@ mod tests {
         assert!(lines[0].contains("STATE"));
         assert!(lines[1].contains("active") && !lines[1].contains("driven"));
         assert!(lines[2].contains("driven") && !lines[2].contains("active"));
+    }
+
+    #[test]
+    fn test_format_targets_text_shows_target_id() {
+        let output = format_targets(&[sample_target("app", None, false)], OutputFormat::Text);
+        assert!(output.lines().nth(1).unwrap().ends_with("[T-app]"));
     }
 
     #[test]

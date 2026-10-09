@@ -168,6 +168,16 @@ pub struct SessionInfo {
     /// connect. `None` means no keyboard is up.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keyboard: Option<KeyboardEmulation>,
+    /// True when this session joined a Chrome the user started (`khora
+    /// attach`) rather than one khora launched. Such a browser has no
+    /// khora-owned PID (`pid` is 0), is checked for liveness through its
+    /// debugging endpoint, and is never closed or signaled by `kill`/`reap`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub attached: bool,
+    /// CDP target ID of the tab this session drives. `None` keeps the default
+    /// page heuristic; `attach` pins it, and `use-target` re-pins it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_id: Option<String>,
 }
 
 impl SessionInfo {
@@ -259,6 +269,8 @@ mod tests {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         }
     }
 

@@ -164,6 +164,42 @@ enum Command {
         window_size: WindowSize,
     },
 
+    /// Join a Chrome you already started, without launching or owning one
+    ///
+    /// Start Chrome yourself with `--remote-debugging-port` (on Chrome 136+ a
+    /// non-default `--user-data-dir` is required too), e.g. on macOS:
+    ///   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+    ///     --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-khora
+    ///
+    /// ENDPOINT is a port, `host:port`, or a full `ws://` browser URL; without
+    /// it, --port (default 9222) on localhost is used. The session drives one
+    /// tab: the most recently active page by default, or --target. Change it
+    /// later with `use-target`. `kill` only disconnects and forgets the
+    /// session — the browser is never closed. Emulation (set-viewport,
+    /// emulate-media, ...) applies to your real, visible tab.
+    Attach {
+        /// Port, host:port, or ws:// browser endpoint (default: localhost:--port)
+        #[arg(conflicts_with = "port")]
+        endpoint: Option<String>,
+        /// Remote-debugging port on localhost
+        #[arg(long, default_value_t = khora_cdp::attach::DEFAULT_PORT)]
+        port: u16,
+        /// Target ID of the tab to drive (see `khora targets`); default is the
+        /// most recently active page
+        #[arg(long)]
+        target: Option<String>,
+    },
+
+    /// Pin a session to a different tab (target ID from `targets`)
+    ///
+    /// Every later command drives that tab. Works on launched sessions too.
+    UseTarget {
+        /// Session ID
+        session: String,
+        /// Target ID of a page, as listed by `khora targets`
+        target: String,
+    },
+
     /// Navigate to a URL
     Navigate {
         /// Session ID
@@ -826,6 +862,84 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             std::mem::forget(client);
 
             Ok(khora_core::output::format_session(&session, cli.format))
+        }
+
+        Command::Attach {
+            endpoint,
+            port,
+            target,
+        } => {
+            let endpoint = match endpoint {
+                Some(e) => khora_cdp::attach::parse_endpoint(e)?,
+                None => khora_cdp::attach::Endpoint::HostPort(format!("127.0.0.1:{port}")),
+            };
+            let ws_url = khora_cdp::attach::resolve_ws_url(&endpoint)?;
+            let pages = khora_cdp::attach::list_page_ids(&ws_url)?;
+            let target_id = match target {
+                Some(t) if pages.contains(t) => Some(t.clone()),
+                Some(t) => return Err(KhoraError::TargetNotFound(t.clone())),
+                // /json/list is most-recently-active first; pin that tab so
+                // later commands keep driving it as the user switches around.
+                None => match pages.first() {
+                    Some(first) => Some(first.clone()),
+                    // Storing no pin would let a later command open a new tab
+                    // in the user's browser.
+                    None => {
+                        return Err(KhoraError::TargetNotFound(
+                            "browser has no page targets to attach to".into(),
+                        ))
+                    }
+                },
+            };
+            let created_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let session = SessionInfo {
+                id: SessionInfo::generate_id(),
+                ws_url,
+                pid: 0,
+                headless: false,
+                created_at,
+                data_dir: None,
+                media: None,
+                touch: None,
+                viewport: None,
+                keyboard: None,
+                attached: true,
+                target_id,
+            };
+            let client = CdpClient::connect(&session, cli.timeout).await?;
+            session.save()?;
+            if let Err(e) = client.install_console_hook().await {
+                tracing::warn!("failed to install console hook: {e}");
+            }
+            if let Err(e) = client.install_network_hook().await {
+                tracing::warn!("failed to install network hook: {e}");
+            }
+            // Dropping only disconnects; the browser belongs to the user.
+            drop(client);
+
+            Ok(khora_core::output::format_session(&session, cli.format))
+        }
+
+        Command::UseTarget { session, target } => {
+            let mut session_info = khora_cdp::load_and_verify(session)?;
+            let client = CdpClient::connect(&session_info, cli.timeout).await?;
+            let found = client
+                .targets()
+                .await?
+                .iter()
+                .any(|t| t.target_type == "page" && &t.target_id == target);
+            if !found {
+                return Err(KhoraError::TargetNotFound(target.clone()));
+            }
+            session_info.target_id = Some(target.clone());
+            session_info.save()?;
+            Ok(khora_core::output::format_session(
+                &session_info,
+                cli.format,
+            ))
         }
 
         Command::Navigate {
@@ -1494,6 +1608,13 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
 
             let mut killed = Vec::new();
             for info in &sessions_to_kill {
+                if info.attached {
+                    // The browser is the user's: forget the session, touch
+                    // nothing else (no Browser.close, no signal, no data dir).
+                    let _ = SessionInfo::remove(&info.id);
+                    killed.push(info.id.clone());
+                    continue;
+                }
                 match CdpClient::connect(info, cli.timeout).await {
                     Ok(client) => {
                         let _ = client.close().await;
@@ -1607,7 +1728,13 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
             let mut reaped = Vec::new();
 
             for info in &sessions {
-                let is_dead = info.pid > 0 && !khora_cdp::is_process_alive(info.pid);
+                // An attached session is "dead" when its endpoint stops
+                // answering; it is never judged by PID.
+                let is_dead = if info.attached {
+                    !khora_cdp::attach::endpoint_alive(&info.ws_url)
+                } else {
+                    khora_cdp::owns_dead_process(info)
+                };
                 let is_old = age_threshold.is_some_and(|threshold| info.created_at <= threshold);
                 let should_reap = is_dead || *all || is_old;
 
@@ -1615,7 +1742,9 @@ async fn run(cli: &Cli) -> Result<String, KhoraError> {
                     continue;
                 }
 
-                if !is_dead {
+                if info.attached {
+                    // Disconnect only: the browser is not ours to close.
+                } else if !is_dead {
                     // Live session: attempt graceful close.
                     match CdpClient::connect(info, cli.timeout).await {
                         Ok(client) => {

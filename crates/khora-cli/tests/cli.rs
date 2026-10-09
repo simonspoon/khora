@@ -1242,3 +1242,66 @@ fn test_rust_log_diagnostics_go_to_stderr_not_stdout() {
 
     std::fs::remove_dir_all(&home).ok();
 }
+
+#[test]
+fn test_attach_help() {
+    khora()
+        .args(["attach", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--remote-debugging-port"))
+        .stdout(predicate::str::contains("--port"))
+        .stdout(predicate::str::contains("--target"))
+        .stdout(predicate::str::contains("never closed"));
+}
+
+#[test]
+fn test_attach_endpoint_conflicts_with_port() {
+    khora()
+        .args(["attach", "localhost:9222", "--port", "9333"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
+#[test]
+fn test_attach_rejects_malformed_endpoint() {
+    khora()
+        .args(["attach", "not an endpoint"])
+        .assert()
+        .failure()
+        .code(5)
+        .stderr(predicate::str::contains("invalid endpoint"));
+}
+
+/// Nothing listens on port 1; the failure is its own exit code (5) rather than
+/// a generic 1, so scripts can tell "start Chrome with a debug port" apart.
+#[test]
+fn test_attach_unreachable_port_exits_5() {
+    khora()
+        .args(["attach", "--port", "1"])
+        .assert()
+        .failure()
+        .code(5)
+        .stderr(predicate::str::contains(
+            "cannot reach Chrome debugging endpoint",
+        ));
+}
+
+#[test]
+fn test_use_target_help() {
+    khora()
+        .args(["use-target", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Pin a session"));
+}
+
+#[test]
+fn test_use_target_nonexistent_session() {
+    khora()
+        .args(["use-target", "nonexistent_xyz", "abc"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("session not found"));
+}

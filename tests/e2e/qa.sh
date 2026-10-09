@@ -1538,6 +1538,74 @@ BYSTANDER_STATE=$([[ -d "$BYSTANDER_DIR" ]] && echo "present" || echo "gone")
 assert_eq "purge leaves non-khora temp dirs alone" "$BYSTANDER_STATE" "present"
 rm -rf "$BYSTANDER_DIR"
 
+# ── attach ───────────────────────────────────────────────
+
+# `attach` joins a Chrome the user started; `kill` must only disconnect. Start
+# one by hand on a free port, drive it, kill the session, and assert the
+# browser is still running before cleaning it up ourselves.
+printf "\n${BOLD}▸ attach${NC}\n"
+ATTACH_CHROME="${CHROME_PATH:-}"
+if [[ -z "$ATTACH_CHROME" ]]; then
+  for CAND in "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" google-chrome google-chrome-stable chromium chromium-browser chrome; do
+    if [[ -x "$CAND" ]] || command -v "$CAND" >/dev/null 2>&1; then ATTACH_CHROME="$CAND"; break; fi
+  done
+fi
+if [[ -z "$ATTACH_CHROME" ]]; then
+  printf "  skipped: no Chrome found for the attach section\n"
+else
+  ATTACH_PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1])")
+  ATTACH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/khora-attach-e2e-XXXXXX")
+  "$ATTACH_CHROME" --headless=new --remote-debugging-port="$ATTACH_PORT" \
+    --user-data-dir="$ATTACH_DIR" --no-first-run --no-default-browser-check \
+    about:blank >/dev/null 2>&1 &
+  ATTACH_CHROME_PID=$!
+  for _ in $(seq 1 50); do
+    curl -sf "http://127.0.0.1:$ATTACH_PORT/json/version" >/dev/null 2>&1 && break
+    sleep 0.2
+  done
+
+  OUTPUT=$("$KHORA" attach --port "$ATTACH_PORT" 2>&1)
+  EC=$?
+  assert_exit "attach exits 0" "$EC" 0
+  assert_contains "attach reports attached" "$OUTPUT" "Attached: true"
+  ATTACH_SESSION=$(echo "$OUTPUT" | grep -oE 'Session: [a-f0-9]+' | head -1 | awk '{print $2}')
+
+  OUTPUT=$("$KHORA" navigate "$ATTACH_SESSION" "$FIXTURE" 2>&1)
+  assert_exit "navigate on attached session exits 0" "$?" 0
+  OUTPUT=$("$KHORA" find "$ATTACH_SESSION" "h1" 2>&1)
+  assert_exit "find on attached session exits 0" "$?" 0
+
+  # Open a second tab and re-pin to it.
+  SECOND_TAB=$(curl -sf -X PUT "http://127.0.0.1:$ATTACH_PORT/json/new?about:blank" | python3 -c "import json,sys; print(json.load(sys.stdin)['id'])")
+  OUTPUT=$("$KHORA" use-target "$ATTACH_SESSION" "$SECOND_TAB" 2>&1)
+  assert_exit "use-target exits 0" "$?" 0
+  OUTPUT=$("$KHORA" --format json targets "$ATTACH_SESSION" 2>&1)
+  assert_contains "targets lists the second tab" "$OUTPUT" "$SECOND_TAB"
+  OUTPUT=$("$KHORA" use-target "$ATTACH_SESSION" no-such-target 2>&1)
+  assert_exit "use-target rejects an unknown target" "$?" 1
+
+  OUTPUT=$("$KHORA" kill "$ATTACH_SESSION" 2>&1)
+  assert_exit "kill on attached session exits 0" "$?" 0
+  OUTPUT=$("$KHORA" status "$ATTACH_SESSION" 2>&1 || true)
+  assert_contains "attached session gone after kill" "$OUTPUT" "not found"
+  if kill -0 "$ATTACH_CHROME_PID" 2>/dev/null \
+    && curl -sf "http://127.0.0.1:$ATTACH_PORT/json/version" >/dev/null 2>&1; then
+    printf "  ${GREEN}PASS${NC}  kill left the attached Chrome running\n"
+    ((PASS++))
+  else
+    printf "  ${RED}FAIL${NC}  kill took down the attached Chrome\n"
+    ((FAIL++))
+  fi
+
+  kill "$ATTACH_CHROME_PID" >/dev/null 2>&1 || true
+  wait "$ATTACH_CHROME_PID" 2>/dev/null || true
+  rm -rf "$ATTACH_DIR"
+fi
+
+# Unreachable endpoint: its own exit code (5), and no session left behind.
+OUTPUT=$("$KHORA" attach --port 1 2>&1)
+assert_exit "attach to an unreachable port exits 5" "$?" 5
+
 # ── summary ──────────────────────────────────────────────
 
 printf "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"

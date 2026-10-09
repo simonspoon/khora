@@ -105,8 +105,19 @@ async fn wait_for_exit(pids: &[u32]) -> bool {
     pids.iter().all(|&p| !is_process_alive(p))
 }
 
+/// True when khora owns this session's Chrome process and that process is
+/// gone. An attached session never qualifies: its browser is the user's, it has
+/// no PID of ours to check, and (since a recorded PID could even be stale
+/// junk) no PID logic may ever decide its fate or lead to a signal.
+pub fn owns_dead_process(info: &SessionInfo) -> bool {
+    !info.attached && info.pid > 0 && !is_process_alive(info.pid)
+}
+
 /// Reap sessions whose Chrome process has died.
 /// Called automatically at CLI startup — best effort, never errors the caller.
+/// Attached sessions are left alone here: judging them needs an HTTP probe,
+/// which is too slow to pay on every invocation; only an explicit `reap` prunes
+/// them, when their endpoint stops answering.
 pub fn reap_stale_sessions() {
     let sessions = match SessionInfo::list_all() {
         Ok(s) => s,
@@ -116,7 +127,7 @@ pub fn reap_stale_sessions() {
         }
     };
     for info in sessions {
-        if info.pid > 0 && !is_process_alive(info.pid) {
+        if owns_dead_process(&info) {
             if let Some(ref dir) = info.data_dir {
                 crate::client::cleanup_data_dir(dir);
             }
@@ -129,6 +140,17 @@ pub fn reap_stale_sessions() {
 /// Load a session and verify it's still valid.
 pub fn load_and_verify(session_id: &str) -> KhoraResult<SessionInfo> {
     let session = SessionInfo::load(session_id)?;
+
+    if session.attached {
+        // No PID to check; the debugging endpoint answering is the liveness.
+        // A failed probe does not delete the session: a busy Chrome can stall
+        // past the probe's bound, and removal would destroy the tab pin.
+        // `reap` is the pruner.
+        if !crate::attach::endpoint_alive(&session.ws_url) {
+            return Err(KhoraError::SessionDead(session_id.to_string()));
+        }
+        return Ok(session);
+    }
 
     if session.pid > 0 && !is_process_alive(session.pid) {
         // Clean up stale session file
@@ -163,7 +185,45 @@ mod tests {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         }
+    }
+
+    #[test]
+    fn attached_session_is_never_dead_by_pid() {
+        // Even with a recorded PID that is certainly not running, an attached
+        // session must not be judged (or reaped) by PID logic.
+        let mut attached = make_session("att", 9_999_999);
+        assert!(owns_dead_process(&attached), "control: launched + dead PID");
+        attached.attached = true;
+        assert!(!owns_dead_process(&attached));
+        attached.pid = 0;
+        assert!(!owns_dead_process(&attached));
+    }
+
+    #[test]
+    fn load_and_verify_keeps_attached_session_with_dead_endpoint() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let id = format!("test-att-dead-{}", now_secs());
+        let mut s = make_session(&id, 0);
+        s.attached = true;
+        s.ws_url = format!("ws://127.0.0.1:{port}/devtools/browser/x");
+        if s.save().is_err() {
+            return; // Sessions dir not available in this environment — skip.
+        }
+        // The auto-reap pass must leave it alone (no PID logic)...
+        reap_stale_sessions();
+        assert!(SessionInfo::load(&id).is_ok());
+        // ...and verification reports it dead but keeps the file (and its pin).
+        let err = load_and_verify(&id).unwrap_err();
+        assert!(matches!(err, KhoraError::SessionDead(_)));
+        assert!(SessionInfo::load(&id).is_ok());
+        let _ = SessionInfo::remove(&id);
     }
 
     #[test]

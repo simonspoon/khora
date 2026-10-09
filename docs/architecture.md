@@ -49,7 +49,9 @@ CLI entry point:
 
 5. `reap --purge-data-dirs` — sweeps `khora-chrome-*` directories in the system temp dir that no current session record names, for profiles orphaned before the leak above was fixed. Directories modified within `PURGE_MIN_AGE` (60s) are spared: `launch` creates the data dir before it writes the session file, so a very fresh directory can belong to a session that is still starting up and would otherwise be invisible to the sweep.
 
-Session files contain: ID, WebSocket URL, PID, headless flag, created-at timestamp, an optional `data_dir` path, and any emulation state that has to outlive a single CDP connection (`media`, `touch`, `viewport`, `keyboard` — see the emulation notes below). Every optional field is `#[serde(default)]` and skipped when absent, so session files written by older builds continue to load.
+6. `attach` — joins a Chrome the user started with `--remote-debugging-port`. The endpoint (port, `host:port`, or `ws://` URL) is resolved through `/json/version`'s `webSocketDebuggerUrl` by a small blocking HTTP client in `khora-cdp/src/attach.rs`, and a session is saved with `attached: true`, `pid: 0` and no `data_dir`. The same file serves liveness: `load_and_verify` treats an attached session as alive while `/json/version` answers (and removes it otherwise), `status` goes through `load_and_verify`, and auto-reap skips attached sessions entirely (`owns_dead_process` is false for them) rather than pay an HTTP probe per invocation — explicit `reap` does probe, and prunes unreachable ones. `kill`/`reap` on an attached session delete the session file and nothing else: no `Browser.close`, no signal, no data-dir removal (`CdpClient::close()` independently refuses to do more than disconnect when its `attached` flag is set). The tab is pinned by `SessionInfo::target_id` (set by `attach`, re-set by `use-target`): `find_page()` returns exactly that page and errors with `TargetNotFound` if it is gone, instead of falling back to the URL heuristic and driving some other tab of the user's. A launched session leaves `target_id` unset and keeps the heuristic. Exit code 5 (`EndpointUnreachable`) is reserved for `attach` failing to reach or parse the endpoint.
+
+Session files contain: ID, WebSocket URL, PID, headless flag, created-at timestamp, an optional `data_dir` path, and any emulation state that has to outlive a single CDP connection (`media`, `touch`, `viewport`, `keyboard` — see the emulation notes below). Attached sessions add `attached` and `target_id`. Every optional field is `#[serde(default)]` and skipped when absent, so session files written by older builds continue to load.
 
 ## CDP integration
 
@@ -79,6 +81,7 @@ All errors flow through `KhoraError` with specific exit codes:
 - 2: Chrome not found
 - 3: Timeout
 - 4: Session not found or dead
+- 5: `attach` could not reach the Chrome debugging endpoint
 
 ## Output format
 

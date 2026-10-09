@@ -46,6 +46,17 @@ pub enum KhoraError {
     #[error("Chrome not found — install Chrome or set CHROME_PATH")]
     ChromeNotFound,
 
+    /// `attach` could not reach (or understand) the browser's remote-debugging
+    /// endpoint. Distinct from `SessionDead`: no session exists yet, and the
+    /// fix is on the user's side (start Chrome with `--remote-debugging-port`).
+    #[error("cannot reach Chrome debugging endpoint: {0}")]
+    EndpointUnreachable(String),
+
+    /// The tab a session is pinned to (or `attach --target`/`use-target` named)
+    /// is not among the browser's page targets.
+    #[error("target not found: {0}")]
+    TargetNotFound(String),
+
     #[error("Chrome launch failed: {0}")]
     LaunchFailed(String),
 
@@ -65,6 +76,7 @@ impl KhoraError {
         match self {
             KhoraError::ChromeNotFound => 2,
             KhoraError::Timeout(_) => 3,
+            KhoraError::EndpointUnreachable(_) => 5,
             KhoraError::SessionNotFound(_)
             | KhoraError::SessionDead(_)
             | KhoraError::SessionUnhealthy(_) => 4,
@@ -82,6 +94,16 @@ mod tests {
     #[test]
     fn test_exit_code_chrome_not_found() {
         assert_eq!(KhoraError::ChromeNotFound.exit_code(), 2);
+    }
+
+    #[test]
+    fn test_exit_code_endpoint_unreachable() {
+        assert_eq!(KhoraError::EndpointUnreachable("x".into()).exit_code(), 5);
+    }
+
+    #[test]
+    fn test_exit_code_target_not_found() {
+        assert_eq!(KhoraError::TargetNotFound("x".into()).exit_code(), 1);
     }
 
     #[test]

@@ -193,6 +193,57 @@ transitions; the state observed by any khora command is always the one you set.
 the print cascade to the live page, so `getComputedStyle` reports printed
 values without exporting a PDF.
 
+### Attaching to your own Chrome
+
+`attach` joins a Chrome you already started, instead of launching one — useful
+for driving a logged-in browser or a page you have open. khora never owns that
+browser: it records no PID, `kill` and `reap` only disconnect and delete the
+session file (no `Browser.close`, no signal, no profile cleanup), and the
+browser keeps running afterwards.
+
+Start Chrome with a debugging port. Chrome 136 and later ignore
+`--remote-debugging-port` on the default profile, so a non-default
+`--user-data-dir` is required:
+
+```bash
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir=$HOME/.chrome-khora
+```
+
+Then attach and use the session id like any other:
+
+```bash
+S=$(khora --format json attach | jq -r .id)       # localhost:9222
+khora attach --port 9333                           # another port
+khora attach 192.168.1.20:9222                     # host:port
+khora attach ws://127.0.0.1:9222/devtools/browser/<id>
+khora navigate "$S" https://example.com
+khora kill "$S"                                    # disconnects; Chrome stays up
+```
+
+The endpoint is resolved through `http://host:port/json/version`
+(`webSocketDebuggerUrl`). If nothing answers, `attach` exits 5. An `attach`
+to a browser with no open page fails with `target not found` rather than
+opening a tab in your browser.
+
+Chrome's DevTools HTTP server only accepts an IP address or `localhost` as the
+host (a hostname gets a 500), so use an IP, or an SSH tunnel to localhost
+(`ssh -L 9222:localhost:9222 host`, then `attach 9222`), for a remote Chrome.
+
+**Tabs.** A session drives one tab. `attach` pins the most recently active
+page; `attach --target <id>` picks another. `khora targets <session>` lists
+every target with its id (the trailing `[id]`), and `khora use-target
+<session> <id>` re-pins an existing session — every later command follows. If
+the pinned tab is closed, commands fail with `target not found` until you
+`use-target` another. Pinning does not bring the tab to the front; a
+background tab can degrade trusted key input (see `targets`).
+
+**Emulation affects your real tab.** `set-viewport`, `emulate-media`,
+`emulate-touch` and `emulate-keyboard` apply to the tab you are looking at, and
+khora also injects its console/network capture hooks into it. Clear them (e.g.
+`set-viewport --reset`) before you detach if you want the tab back as it was.
+
 ### Multiple sessions
 
 ```bash
@@ -989,3 +1040,4 @@ export KHORA_TIMEOUT=10000
 | 2 | Chrome not found |
 | 3 | Timeout |
 | 4 | Session not found, dead, or (under `status --check`) degraded |
+| 5 | `attach` could not reach the Chrome debugging endpoint |

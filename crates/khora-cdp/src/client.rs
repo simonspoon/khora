@@ -278,6 +278,11 @@ pub struct CdpClient {
     /// same reason — its page-side install rides on a CDP-session-scoped
     /// `Page.addScriptToEvaluateOnNewDocument`, which dies with the connection.
     keyboard: Option<KeyboardEmulation>,
+    /// The session joined a user-owned Chrome. `close()` then only
+    /// disconnects: no `Browser.close`, no signal, no data-dir removal.
+    attached: bool,
+    /// Tab the session is pinned to; `None` falls back to the URL heuristic.
+    target_id: Option<String>,
 }
 
 impl CdpClient {
@@ -359,6 +364,8 @@ impl CdpClient {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         };
 
         let client = Self {
@@ -371,6 +378,8 @@ impl CdpClient {
             touch: None,
             viewport: None,
             keyboard: None,
+            attached: false,
+            target_id: None,
         };
 
         Ok((client, session))
@@ -417,6 +426,8 @@ impl CdpClient {
             touch: session.touch,
             viewport: session.viewport,
             keyboard: session.keyboard,
+            attached: session.attached,
+            target_id: session.target_id.clone(),
         })
     }
 
@@ -2278,7 +2289,15 @@ impl CdpClient {
     /// Sends a graceful CDP `Browser.close`, then falls back to signaling the
     /// OS process directly (SIGTERM/SIGKILL) since `drop`ping a `Browser`
     /// obtained via `connect()` has no child handle to kill on its own.
+    ///
+    /// An attached session's browser is the user's, so there it only drops the
+    /// connection and touches nothing else.
     pub async fn close(mut self) -> KhoraResult<()> {
+        if self.attached {
+            drop(self.browser);
+            self._handler_handle.abort();
+            return Ok(());
+        }
         let _ =
             tokio::time::timeout(std::time::Duration::from_millis(500), self.browser.close()).await;
         drop(self.browser);
@@ -2516,7 +2535,9 @@ impl CdpClient {
     pub async fn targets(&self) -> KhoraResult<Vec<BrowserTarget>> {
         let driven = self
             .find_page()
-            .await?
+            .await
+            .ok()
+            .flatten()
             .map(|p| p.target_id().inner().clone());
 
         // `document.visibilityState` is the only signal for "foreground tab"
@@ -2701,6 +2722,28 @@ impl CdpClient {
         if pages.is_empty() {
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
             while pages.is_empty() && std::time::Instant::now() < deadline {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                pages = self
+                    .browser
+                    .pages()
+                    .await
+                    .map_err(|e| KhoraError::Cdp(e.to_string()))?;
+            }
+        }
+
+        if let Some(id) = &self.target_id {
+            // Pinned: no URL heuristic. A missing tab is an error rather than a
+            // silent switch to another one, which on an attached session would
+            // be the user's own tab. Re-poll briefly, as above, in case the
+            // target list is still syncing.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+            loop {
+                if let Some(p) = pages.iter().find(|p| p.target_id().inner() == id) {
+                    return Ok(Some(p.clone()));
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(KhoraError::TargetNotFound(id.clone()));
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
                 pages = self
                     .browser
